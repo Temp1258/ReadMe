@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "ReadMe",
+  "description": "A lightweight Chrome/Edge extension for chat.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "ReadMe",
+    "default_popup": "index.html"
+  },
+  "permissions": ["storage"]
+}
