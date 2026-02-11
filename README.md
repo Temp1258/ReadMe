@@ -1,8 +1,8 @@
 # ReadMe
 
-ReadMe is a lightweight Chrome/Edge extension for chat. This repository currently includes the Manifest V3 extension scaffold for Issue #1.
+ReadMe is a lightweight Chrome/Edge extension for chat. This repository now includes Issue #1 scaffold work and Issue #2 login/token storage in the popup UI.
 
-## Extension scaffold (`/extension`)
+## Extension (`/extension`)
 
 The extension is built with:
 
@@ -39,7 +39,32 @@ The production build output is generated in `extension/dist`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
 5. Select the `extension/dist` folder.
-6. Open the extension popup and confirm the title displays **ReadMe**.
+6. Open the extension popup.
+
+## Login flow (Issue #2)
+
+The popup now supports:
+
+- Email + password login via `POST http://localhost:8080/auth/login`
+- Mock login fallback for local UI testing when backend is unavailable
+- Auth persistence in `chrome.storage.local` (`token` + `email`)
+- Logout that clears `chrome.storage.local`
+
+### Test login with backend
+
+1. Start a backend locally at `http://localhost:8080` that accepts `POST /auth/login` and returns JSON with an `accessToken` field.
+2. Open the extension popup.
+3. Enter email/password and click **Login**.
+4. Verify the popup shows the **Chats** placeholder screen.
+5. Close/reopen the popup and verify auth is still persisted.
+
+### Test login in mock mode (no backend required)
+
+1. Open the extension popup.
+2. Enter an email address (password optional for mock mode).
+3. Click **Mock Login**.
+4. Verify the popup shows the **Chats** placeholder screen.
+5. Click **Logout** and verify the login form is shown again.
 
 ## Available scripts
 
