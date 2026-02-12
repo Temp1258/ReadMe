@@ -21,6 +21,65 @@ const SAMPLE_TRANSCRIPT_FRAGMENTS = [
   'Next step: wire real audio capture and transcription in a follow-up issue.',
 ];
 
+const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
+
+type RuntimeContext = {
+  contextType: string;
+  documentUrl?: string;
+};
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.id || !chrome.offscreen?.createDocument) {
+    return;
+  }
+
+  const offscreenDocumentUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  const getContexts = chrome.runtime.getContexts as
+    | ((query: { contextTypes: string[]; documentUrls: string[] }) => Promise<RuntimeContext[]>)
+    | undefined;
+
+  if (getContexts) {
+    const contexts = await getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [offscreenDocumentUrl],
+    });
+
+    if (contexts.length > 0) {
+      return;
+    }
+  }
+
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: [chrome.offscreen.Reason.DOM_PARSER],
+      justification: 'Handle runtime message passing from popup in MV3 offscreen context.',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('single offscreen document')) {
+      throw error;
+    }
+  }
+}
+
+async function pingOffscreenDocument(): Promise<void> {
+  if (typeof chrome === 'undefined') {
+    return;
+  }
+
+  const sendMessage = chrome.runtime?.sendMessage as ((message: { type: string }) => Promise<{ type?: string }>) | undefined;
+
+  if (!sendMessage) {
+    return;
+  }
+
+  const response = await sendMessage({ type: 'PING' });
+  if (response?.type !== 'PONG') {
+    throw new Error('Offscreen document did not return PONG.');
+  }
+}
+
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
   set: (items: Record<string, unknown>, callback?: () => void) => void;
@@ -206,8 +265,17 @@ function App() {
     setActiveView('transcription');
   };
 
-  const handleStartListening = () => {
-    setStatus('Listening');
+  const handleStartListening = async () => {
+    setError(null);
+
+    try {
+      await ensureOffscreenDocument();
+      await pingOffscreenDocument();
+      setStatus('Listening');
+    } catch (startError) {
+      setStatus('Error');
+      setError(startError instanceof Error ? startError.message : 'Unable to start offscreen runtime.');
+    }
   };
 
   const handleStopListening = () => {
@@ -262,6 +330,8 @@ function App() {
                 Stop
               </button>
             </div>
+
+            {error && <p className="error">{error}</p>}
 
             <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
               {transcriptLines.map((line, index) => (
