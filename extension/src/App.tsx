@@ -41,6 +41,40 @@ function sortMessagesChronologically(messages: Message[]): Message[] {
   });
 }
 
+function mergeMessages(previous: Message[], incoming: Message[]): Message[] {
+  const seenIds = new Set(previous.map((message) => message.id));
+  const nextMessages = [...previous];
+
+  for (const message of incoming) {
+    if (seenIds.has(message.id)) {
+      continue;
+    }
+
+    seenIds.add(message.id);
+    nextMessages.push(message);
+  }
+
+  return sortMessagesChronologically(nextMessages);
+}
+
+function renderMessageWithLinks(text: string) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+  return text.split(urlRegex).map((part, index) => {
+    const isUrl = /^https?:\/\/[^\s]+$/.test(part);
+
+    if (!isUrl) {
+      return part;
+    }
+
+    return (
+      <a href={part} key={`${part}-${index}`} rel="noopener noreferrer" target="_blank">
+        {part}
+      </a>
+    );
+  });
+}
+
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
   set: (items: Record<string, unknown>, callback?: () => void) => void;
@@ -112,6 +146,7 @@ function App() {
   const [draftMessage, setDraftMessage] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const lastMessageIdRef = useRef(0);
 
   useEffect(() => {
     readAuthState().then((storedAuth) => {
@@ -259,11 +294,87 @@ function App() {
     }
 
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    lastMessageIdRef.current = messages.length > 0 ? Math.max(...messages.map((message) => message.id)) : 0;
   }, [messages]);
 
   const appendMessage = (message: Message) => {
-    setMessages((previous) => sortMessagesChronologically([...previous, message]));
+    setMessages((previous) => mergeMessages(previous, [message]));
   };
+
+  useEffect(() => {
+    if (!auth?.token || !activeConversation) {
+      return;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const lastMessageId = lastMessageIdRef.current;
+        const query = new URLSearchParams({
+          conversation_id: activeConversation.id,
+          after_id: String(lastMessageId),
+        });
+
+        const response = await fetch(`${apiBaseUrl}/messages?${query.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+          },
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as unknown;
+
+        if (!Array.isArray(data) || data.length === 0) {
+          return;
+        }
+
+        const parsed = data
+          .map((message): Message | null => {
+            if (typeof message !== 'object' || message === null) {
+              return null;
+            }
+
+            const rawId = (message as { id?: unknown }).id;
+            const rawConversationId = (message as { conversation_id?: unknown }).conversation_id;
+            const rawSenderId = (message as { sender_id?: unknown }).sender_id;
+            const rawText = (message as { text?: unknown }).text;
+            const rawCreatedAt = (message as { created_at?: unknown }).created_at;
+
+            if (
+              typeof rawId !== 'number' ||
+              typeof rawConversationId !== 'string' ||
+              typeof rawSenderId !== 'string' ||
+              typeof rawText !== 'string'
+            ) {
+              return null;
+            }
+
+            return {
+              id: rawId,
+              conversation_id: rawConversationId,
+              sender_id: rawSenderId,
+              text: rawText,
+              created_at: typeof rawCreatedAt === 'string' ? rawCreatedAt : undefined,
+            };
+          })
+          .filter((message): message is Message => message !== null);
+
+        if (parsed.length === 0) {
+          return;
+        }
+
+        setMessages((previous) => mergeMessages(previous, parsed));
+      } catch {
+        // Silently ignore polling errors to keep UI stable.
+      }
+    }, 2000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeConversation, apiBaseUrl, auth]);
 
   const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -434,7 +545,7 @@ function App() {
                 return (
                   <article className={`message ${isMe ? 'message--me' : 'message--other'}`} key={message.id}>
                     <p className="message__sender">{isMe ? 'me' : message.sender_id}</p>
-                    <p className="message__text">{message.text}</p>
+                    <p className="message__text">{renderMessageWithLinks(message.text)}</p>
                   </article>
                 );
               })}
