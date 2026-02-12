@@ -145,3 +145,39 @@ h2 {
   background: #eff6ff;
   border-color: #93c5fd;
 }
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.message {
+  border-radius: 8px;
+  font-size: 14px;
+  padding: 8px 10px;
+}
+
+.message--me {
+  align-self: flex-end;
+  background: #dbeafe;
+}
+
+.message--other {
+  align-self: flex-start;
+  background: #f3f4f6;
+}
+
+.message__sender {
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.message__text {
+  margin: 0;
+}

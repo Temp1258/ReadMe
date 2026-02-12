@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 type AuthState = {
   token: string;
   email: string;
+  userId?: string;
 };
 
 type Conversation = {
@@ -10,10 +11,35 @@ type Conversation = {
   title: string;
 };
 
+type Message = {
+  id: number;
+  conversation_id: string;
+  sender_id: string;
+  text: string;
+  created_at?: string;
+};
+
 const AUTH_STORAGE_KEY = 'auth';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
 const FALLBACK_CONVERSATIONS: Conversation[] = [{ id: 'c_1', title: 'Test Chat' }];
+
+function buildMockMessages(conversationId: string): Message[] {
+  return [{ id: 1, conversation_id: conversationId, sender_id: 'mock_user', text: 'Hello (mock)' }];
+}
+
+function sortMessagesChronologically(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    const aCreatedAt = typeof a.created_at === 'string' ? Date.parse(a.created_at) : Number.NaN;
+    const bCreatedAt = typeof b.created_at === 'string' ? Date.parse(b.created_at) : Number.NaN;
+
+    if (!Number.isNaN(aCreatedAt) && !Number.isNaN(bCreatedAt) && aCreatedAt !== bCreatedAt) {
+      return aCreatedAt - bCreatedAt;
+    }
+
+    return a.id - b.id;
+  });
+}
 
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
@@ -80,6 +106,9 @@ function App() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
 
   useEffect(() => {
     readAuthState().then((storedAuth) => {
@@ -145,6 +174,82 @@ function App() {
     fetchConversations();
   }, [apiBaseUrl, auth]);
 
+  useEffect(() => {
+    if (!auth?.token || !activeConversation) {
+      setMessages([]);
+      setMessageError(null);
+      return;
+    }
+
+    const fetchMessages = async () => {
+      setIsLoadingMessages(true);
+      setMessageError(null);
+
+      try {
+        const query = new URLSearchParams({ conversation_id: activeConversation.id, limit: '50' });
+        const response = await fetch(`${apiBaseUrl}/messages?${query.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load message history from API. Showing mock message.');
+        }
+
+        const data = (await response.json()) as unknown;
+
+        if (!Array.isArray(data)) {
+          throw new Error('Messages API returned an invalid response. Showing mock message.');
+        }
+
+        const parsed = data
+          .map((message): Message | null => {
+            if (typeof message !== 'object' || message === null) {
+              return null;
+            }
+
+            const rawId = (message as { id?: unknown }).id;
+            const rawConversationId = (message as { conversation_id?: unknown }).conversation_id;
+            const rawSenderId = (message as { sender_id?: unknown }).sender_id;
+            const rawText = (message as { text?: unknown }).text;
+            const rawCreatedAt = (message as { created_at?: unknown }).created_at;
+
+            if (
+              typeof rawId !== 'number' ||
+              typeof rawConversationId !== 'string' ||
+              typeof rawSenderId !== 'string' ||
+              typeof rawText !== 'string'
+            ) {
+              return null;
+            }
+
+            return {
+              id: rawId,
+              conversation_id: rawConversationId,
+              sender_id: rawSenderId,
+              text: rawText,
+              created_at: typeof rawCreatedAt === 'string' ? rawCreatedAt : undefined,
+            };
+          })
+          .filter((message): message is Message => message !== null);
+
+        if (parsed.length === 0 && data.length > 0) {
+          throw new Error('Messages API returned invalid payload. Showing mock message.');
+        }
+
+        setMessages(sortMessagesChronologically(parsed));
+      } catch (fetchError) {
+        setMessages(buildMockMessages(activeConversation.id));
+        setMessageError(fetchError instanceof Error ? fetchError.message : 'Unable to load message history. Showing mock message.');
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    };
+
+    fetchMessages();
+  }, [activeConversation, apiBaseUrl, auth]);
+
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -169,15 +274,21 @@ function App() {
         throw new Error('Login failed. You can use Mock Login for local UI testing.');
       }
 
-      const data = (await response.json()) as { accessToken?: string };
+      const data = (await response.json()) as {
+        accessToken?: string;
+        access_token?: string;
+        user?: { id?: string; email?: string };
+      };
+      const accessToken = data.accessToken ?? data.access_token;
 
-      if (!data.accessToken) {
+      if (!accessToken) {
         throw new Error('Login succeeded but no access token was returned.');
       }
 
       const nextAuth = {
-        token: data.accessToken,
+        token: accessToken,
         email,
+        userId: data.user?.id,
       };
 
       await persistAuthState(nextAuth);
@@ -202,6 +313,7 @@ function App() {
     const nextAuth = {
       token: DEV_MOCK_TOKEN,
       email,
+      userId: email,
     };
 
     await persistAuthState(nextAuth);
@@ -234,7 +346,23 @@ function App() {
           <section className="panel">
             <h2>{activeConversation.title}</h2>
             <p className="panel__subtitle">Signed in as {auth.email}</p>
-            <p className="panel__body">Chat view placeholder for {activeConversation.title}.</p>
+            {isLoadingMessages ? <p className="panel__body">Loading messages...</p> : null}
+            {messageError ? <p className="error">{messageError}</p> : null}
+
+            <div className="message-list" role="log" aria-live="polite">
+              {messages.map((message) => {
+                const isMe = message.sender_id === (auth.userId ?? auth.email);
+
+                return (
+                  <article className={`message ${isMe ? 'message--me' : 'message--other'}`} key={message.id}>
+                    <p className="message__sender">{isMe ? 'me' : message.sender_id}</p>
+                    <p className="message__text">{message.text}</p>
+                  </article>
+                );
+              })}
+
+              {!isLoadingMessages && messages.length === 0 ? <p className="panel__body">No messages yet.</p> : null}
+            </div>
           </section>
         </main>
       );
