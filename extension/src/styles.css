@@ -155,6 +155,21 @@ h2 {
   padding-right: 4px;
 }
 
+.composer {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.composer__input {
+  flex: 1;
+}
+
+.composer__button {
+  margin-top: 0;
+}
+
 .message {
   border-radius: 8px;
   font-size: 14px;
