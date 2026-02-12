@@ -5,9 +5,15 @@ type AuthState = {
   email: string;
 };
 
+type Conversation = {
+  id: string;
+  title: string;
+};
+
 const AUTH_STORAGE_KEY = 'auth';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
+const FALLBACK_CONVERSATIONS: Conversation[] = [{ id: 'c_1', title: 'Test Chat' }];
 
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
@@ -70,6 +76,10 @@ function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
 
   useEffect(() => {
     readAuthState().then((storedAuth) => {
@@ -80,6 +90,49 @@ function App() {
   }, []);
 
   const apiBaseUrl = useMemo(() => DEFAULT_API_BASE_URL, []);
+
+  useEffect(() => {
+    if (!auth?.token) {
+      setConversations([]);
+      setConversationError(null);
+      setActiveConversation(null);
+      return;
+    }
+
+    const fetchConversations = async () => {
+      setIsLoadingConversations(true);
+      setConversationError(null);
+
+      try {
+        const response = await fetch(`${apiBaseUrl}/conversations`, {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load conversations from API. Showing fallback list.');
+        }
+
+        const data = (await response.json()) as Array<{ id?: string; title?: string }>;
+        const parsed = data
+          .map((conversation, index) => ({
+            id: conversation.id?.trim() || `conversation-${index}`,
+            title: conversation.title?.trim() || `Conversation ${index + 1}`,
+          }))
+          .filter((conversation) => conversation.id);
+
+        setConversations(parsed.length > 0 ? parsed : FALLBACK_CONVERSATIONS);
+      } catch (fetchError) {
+        setConversations(FALLBACK_CONVERSATIONS);
+        setConversationError(fetchError instanceof Error ? fetchError.message : 'Unable to load conversations. Showing fallback list.');
+      } finally {
+        setIsLoadingConversations(false);
+      }
+    };
+
+    fetchConversations();
+  }, [apiBaseUrl, auth]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -155,6 +208,27 @@ function App() {
   };
 
   if (auth) {
+    if (activeConversation) {
+      return (
+        <main className="popup">
+          <header className="popup__header">
+            <button className="button button--ghost" onClick={() => setActiveConversation(null)} type="button">
+              ← Back
+            </button>
+            <button className="button button--ghost" onClick={handleLogout} type="button">
+              Logout
+            </button>
+          </header>
+
+          <section className="panel">
+            <h2>{activeConversation.title}</h2>
+            <p className="panel__subtitle">Signed in as {auth.email}</p>
+            <p className="panel__body">Chat view placeholder for {activeConversation.title}.</p>
+          </section>
+        </main>
+      );
+    }
+
     return (
       <main className="popup">
         <header className="popup__header">
@@ -165,9 +239,22 @@ function App() {
         </header>
 
         <section className="panel">
-          <h2>Chats</h2>
+          <h2>Conversations</h2>
           <p className="panel__subtitle">Signed in as {auth.email}</p>
-          <p className="panel__body">Chat list placeholder for Issue #2.</p>
+          {isLoadingConversations ? <p className="panel__body">Loading conversations...</p> : null}
+          {conversationError ? <p className="error">{conversationError}</p> : null}
+
+          {!isLoadingConversations ? (
+            <ul className="conversation-list">
+              {conversations.map((conversation) => (
+                <li key={conversation.id}>
+                  <button className="conversation-item" onClick={() => setActiveConversation(conversation)} type="button">
+                    {conversation.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       </main>
     );
