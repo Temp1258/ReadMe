@@ -18,7 +18,7 @@ const FALLBACK_CONVERSATIONS: Conversation[] = [{ id: 'c_1', title: 'Test Chat' 
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
   set: (items: Record<string, unknown>, callback?: () => void) => void;
-  clear: (callback?: () => void) => void;
+  remove: (keys: string | string[], callback?: () => void) => void;
 };
 
 function getStorageArea(): ChromeStorageArea | null {
@@ -66,7 +66,7 @@ async function clearAuthState(): Promise<void> {
   }
 
   await new Promise<void>((resolve) => {
-    storage.clear(() => resolve());
+    storage.remove(AUTH_STORAGE_KEY, () => resolve());
   });
 }
 
@@ -114,11 +114,22 @@ function App() {
           throw new Error('Failed to load conversations from API. Showing fallback list.');
         }
 
-        const data = (await response.json()) as Array<{ id?: string; title?: string }>;
+        const data = (await response.json()) as unknown;
+
+        if (!Array.isArray(data)) {
+          throw new Error('Conversations API returned an invalid response. Showing fallback list.');
+        }
+
         const parsed = data
           .map((conversation, index) => ({
-            id: conversation.id?.trim() || `conversation-${index}`,
-            title: conversation.title?.trim() || `Conversation ${index + 1}`,
+            id:
+              typeof conversation.id === 'string' && conversation.id.trim().length > 0
+                ? conversation.id.trim()
+                : `conversation-${index}`,
+            title:
+              typeof conversation.title === 'string' && conversation.title.trim().length > 0
+                ? conversation.title.trim()
+                : `Conversation ${index + 1}`,
           }))
           .filter((conversation) => conversation.id);
 
