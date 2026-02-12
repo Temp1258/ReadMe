@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type AuthState = {
   token: string;
@@ -109,6 +109,9 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
+  const [draftMessage, setDraftMessage] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     readAuthState().then((storedAuth) => {
@@ -250,6 +253,81 @@ function App() {
     fetchMessages();
   }, [activeConversation, apiBaseUrl, auth]);
 
+  useEffect(() => {
+    if (!messageListRef.current) {
+      return;
+    }
+
+    messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+  }, [messages]);
+
+  const appendMessage = (message: Message) => {
+    setMessages((previous) => sortMessagesChronologically([...previous, message]));
+  };
+
+  const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!auth || !activeConversation) {
+      return;
+    }
+
+    const trimmedMessage = draftMessage.trim();
+    if (!trimmedMessage || isSendingMessage) {
+      return;
+    }
+
+    setIsSendingMessage(true);
+    setMessageError(null);
+
+    const localId = Date.now();
+    const localMessage: Message = {
+      id: localId,
+      conversation_id: activeConversation.id,
+      sender_id: auth.userId ?? auth.email,
+      text: trimmedMessage,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({
+          conversation_id: activeConversation.id,
+          text: trimmedMessage,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message via API. Added as local mock message.');
+      }
+
+      const payload = (await response.json()) as Partial<Message>;
+      const responseId = typeof payload.id === 'number' ? payload.id : localId;
+
+      appendMessage({
+        id: responseId,
+        conversation_id:
+          typeof payload.conversation_id === 'string' && payload.conversation_id.length > 0
+            ? payload.conversation_id
+            : activeConversation.id,
+        sender_id: typeof payload.sender_id === 'string' && payload.sender_id.length > 0 ? payload.sender_id : auth.userId ?? auth.email,
+        text: typeof payload.text === 'string' && payload.text.length > 0 ? payload.text : trimmedMessage,
+        created_at: typeof payload.created_at === 'string' ? payload.created_at : new Date().toISOString(),
+      });
+    } catch (sendError) {
+      appendMessage(localMessage);
+      setMessageError(sendError instanceof Error ? sendError.message : 'Unable to send message via API. Added as local mock message.');
+    } finally {
+      setDraftMessage('');
+      setIsSendingMessage(false);
+    }
+  };
+
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -349,7 +427,7 @@ function App() {
             {isLoadingMessages ? <p className="panel__body">Loading messages...</p> : null}
             {messageError ? <p className="error">{messageError}</p> : null}
 
-            <div className="message-list" role="log" aria-live="polite">
+            <div className="message-list" ref={messageListRef} role="log" aria-live="polite">
               {messages.map((message) => {
                 const isMe = message.sender_id === (auth.userId ?? auth.email);
 
@@ -363,6 +441,20 @@ function App() {
 
               {!isLoadingMessages && messages.length === 0 ? <p className="panel__body">No messages yet.</p> : null}
             </div>
+
+            <form className="composer" onSubmit={handleSendMessage}>
+              <input
+                aria-label="Type your message"
+                className="form__input composer__input"
+                onChange={(event) => setDraftMessage(event.target.value)}
+                placeholder="Write a message"
+                type="text"
+                value={draftMessage}
+              />
+              <button className="button composer__button" disabled={!draftMessage.trim() || isSendingMessage} type="submit">
+                {isSendingMessage ? 'Sending...' : 'Send'}
+              </button>
+            </form>
           </section>
         </main>
       );
