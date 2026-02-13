@@ -2,6 +2,7 @@ export type DefaultSource = 'microphone' | 'tab';
 
 export type ExtensionSettings = {
   sttApiKey?: string;
+  sttapikey?: string;
   whisperApiKey?: string;
   openaiApiKey?: string;
   apiKey?: string;
@@ -9,7 +10,7 @@ export type ExtensionSettings = {
   defaultSource?: DefaultSource;
 };
 
-export type ApiKeyFieldName = 'sttApiKey' | 'whisperApiKey' | 'openaiApiKey' | 'apiKey' | 'apikey';
+export type ApiKeyFieldName = 'sttApiKey' | 'sttapikey' | 'whisperApiKey' | 'openaiApiKey' | 'apiKey' | 'apikey';
 
 export type NormalizedApiKey = {
   apiKey: string;
@@ -44,7 +45,7 @@ function normalizeSettings(settings: ExtensionSettings): ExtensionSettings {
 }
 
 export function getNormalizedApiKey(settings: ExtensionSettings): NormalizedApiKey {
-  const candidates: ApiKeyFieldName[] = ['sttApiKey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'];
+  const candidates: ApiKeyFieldName[] = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'];
 
   for (const fieldName of candidates) {
     const value = settings[fieldName]?.trim();
@@ -72,16 +73,42 @@ export async function getSettings(): Promise<ExtensionSettings> {
     }
 
     try {
-      return normalizeSettings(JSON.parse(raw) as ExtensionSettings);
+      const settings = JSON.parse(raw) as ExtensionSettings;
+      const normalized = normalizeSettings(settings);
+
+      if (JSON.stringify(settings) !== JSON.stringify(normalized)) {
+        window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+      }
+
+      return normalized;
     } catch {
       return { ...defaults };
     }
   }
 
   return new Promise((resolve) => {
-    storage.get(SETTINGS_STORAGE_KEY, (items) => {
-      const settings = (items[SETTINGS_STORAGE_KEY] as ExtensionSettings | undefined) ?? {};
-      resolve(normalizeSettings(settings));
+    storage.get([SETTINGS_STORAGE_KEY, 'sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'], (items) => {
+      const storedSettings = (items[SETTINGS_STORAGE_KEY] as ExtensionSettings | undefined) ?? {};
+
+      const settings: ExtensionSettings = {
+        ...storedSettings,
+        sttApiKey: storedSettings.sttApiKey ?? (items.sttApiKey as string | undefined),
+        sttapikey: storedSettings.sttapikey ?? (items.sttapikey as string | undefined),
+        whisperApiKey: storedSettings.whisperApiKey ?? (items.whisperApiKey as string | undefined),
+        openaiApiKey: storedSettings.openaiApiKey ?? (items.openaiApiKey as string | undefined),
+        apiKey: storedSettings.apiKey ?? (items.apiKey as string | undefined),
+        apikey: storedSettings.apikey ?? (items.apikey as string | undefined),
+      };
+
+      const normalized = normalizeSettings(settings);
+      const shouldPersist = JSON.stringify(storedSettings) !== JSON.stringify(normalized);
+
+      if (!shouldPersist) {
+        resolve(normalized);
+        return;
+      }
+
+      storage.set({ [SETTINGS_STORAGE_KEY]: normalized }, () => resolve(normalized));
     });
   });
 }
