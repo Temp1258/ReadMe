@@ -1,8 +1,10 @@
+import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
 import { transcribeAudioBlob } from './stt/whisper';
 
 export {};
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
+type PersistedStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'error';
 
 type RuntimeMessage =
   | { type: 'PING' }
@@ -33,7 +35,24 @@ const state = {
   queue: [] as ChunkJob[],
   processingQueue: false,
   transcript: '',
+  activeSessionId: null as string | null,
 };
+
+function toPersistedStatus(status: AudioStatus): PersistedStatus {
+  if (status === 'Listening') {
+    return 'listening';
+  }
+
+  if (status === 'Transcribing') {
+    return 'transcribing';
+  }
+
+  if (status === 'Error') {
+    return 'error';
+  }
+
+  return 'idle';
+}
 
 function broadcast(message: RuntimeEventMessage): void {
   if (!chrome.runtime?.id) {
@@ -48,6 +67,13 @@ function broadcast(message: RuntimeEventMessage): void {
 function updateStatus(status: AudioStatus, detail?: string): void {
   state.status = status;
   state.detail = detail ?? status;
+
+  const activeSessionId = state.activeSessionId;
+  if (activeSessionId) {
+    void updateSessionState(activeSessionId, {
+      status: toPersistedStatus(status),
+    });
+  }
 
   broadcast({
     type: 'STATUS_UPDATE',
@@ -100,6 +126,10 @@ function appendTranscript(seq: number, text: string): void {
   }
 
   state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
+
+  if (state.activeSessionId) {
+    void appendSessionSegment(state.activeSessionId, normalized);
+  }
 
   broadcast({
     type: 'TRANSCRIPT_UPDATE',
@@ -175,6 +205,15 @@ async function stopRecording(): Promise<void> {
   await stopTracks();
   state.queue = [];
   state.processingQueue = false;
+
+  if (state.activeSessionId) {
+    void updateSessionState(state.activeSessionId, {
+      endedAt: Date.now(),
+      status: 'stopped',
+    });
+    state.activeSessionId = null;
+  }
+
   updateStatus('Idle', 'Idle');
 }
 
@@ -202,6 +241,16 @@ async function startRecording(deviceId?: string): Promise<void> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: audioConstraint,
     video: false,
+  });
+
+  const sessionId = crypto.randomUUID();
+  state.activeSessionId = sessionId;
+  await createSession({
+    id: sessionId,
+    startedAt: Date.now(),
+    source: 'mic',
+    deviceId: state.selectedDeviceId,
+    status: 'listening',
   });
 
   state.activeStream = stream;
