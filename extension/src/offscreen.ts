@@ -1,6 +1,8 @@
+import { transcribeAudioBlob } from './stt/whisper';
+
 export {};
 
-type AudioStatus = 'Idle' | 'Recording' | 'Error';
+type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
 
 type RuntimeMessage =
   | { type: 'PING' }
@@ -9,11 +11,17 @@ type RuntimeMessage =
   | { type: 'STOP_RECORDING' };
 
 type RuntimeEventMessage =
-  | { type: 'AUDIO_CHUNK'; payload: { seq: number; ts: number; mimeType: string; size: number; dataBase64: string } }
   | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
+  | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'ERROR'; payload: { message: string } };
 
-const CHUNK_TIMESLICE_MS = 1000;
+type ChunkJob = {
+  seq: number;
+  blob: Blob;
+};
+
+const CHUNK_TIMESLICE_MS = 12_000;
+const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 
 const state = {
   status: 'Idle' as AudioStatus,
@@ -22,6 +30,9 @@ const state = {
   seq: 0,
   activeStream: null as MediaStream | null,
   recorder: null as MediaRecorder | null,
+  queue: [] as ChunkJob[],
+  processingQueue: false,
+  transcript: '',
 };
 
 function broadcast(message: RuntimeEventMessage): void {
@@ -63,27 +74,91 @@ async function stopTracks(): Promise<void> {
   state.activeStream = null;
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+async function getStoredApiKey(): Promise<string> {
+  if (!chrome.storage?.local) {
+    return '';
+  }
 
-    reader.onloadend = () => {
-      const result = reader.result;
-      if (typeof result !== 'string') {
-        reject(new Error('Unable to encode audio chunk.'));
-        return;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(STT_API_KEY_STORAGE_KEY, (items) => {
+      resolve((items[STT_API_KEY_STORAGE_KEY] as string | undefined)?.trim() ?? '');
+    });
+  });
+}
+
+function enqueueChunk(blob: Blob): void {
+  const nextSeq = state.seq + 1;
+  state.seq = nextSeq;
+  state.queue.push({ seq: nextSeq, blob });
+  void processQueue();
+}
+
+function appendTranscript(seq: number, text: string): void {
+  const normalized = text.trim();
+  if (!normalized) {
+    return;
+  }
+
+  state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
+
+  broadcast({
+    type: 'TRANSCRIPT_UPDATE',
+    payload: {
+      seq,
+      text: normalized,
+      transcript: state.transcript,
+    },
+  });
+}
+
+async function transcribeChunk(job: ChunkJob): Promise<void> {
+  const apiKey = await getStoredApiKey();
+
+  if (!apiKey) {
+    appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
+    return;
+  }
+
+  const text = await transcribeAudioBlob(job.blob, {
+    apiKey,
+    model: 'whisper-1',
+    fileName: `chunk-${job.seq}.webm`,
+  });
+
+  appendTranscript(job.seq, text || `[empty] chunk ${job.seq}`);
+}
+
+async function processQueue(): Promise<void> {
+  if (state.processingQueue) {
+    return;
+  }
+
+  state.processingQueue = true;
+
+  try {
+    while (state.queue.length > 0) {
+      const job = state.queue.shift();
+
+      if (!job) {
+        break;
       }
 
-      const [, base64 = ''] = result.split(',');
-      resolve(base64);
-    };
+      updateStatus('Transcribing', `Transcribing chunk ${job.seq}...`);
 
-    reader.onerror = () => {
-      reject(new Error('Unable to read audio chunk data.'));
-    };
+      try {
+        await transcribeChunk(job);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        publishError(`Chunk ${job.seq} failed: ${message}`);
+      }
 
-    reader.readAsDataURL(blob);
-  });
+      if (state.recorder && state.recorder.state !== 'inactive') {
+        updateStatus('Listening', `Listening on ${state.selectedDeviceId}`);
+      }
+    }
+  } finally {
+    state.processingQueue = false;
+  }
 }
 
 async function stopRecording(): Promise<void> {
@@ -98,6 +173,8 @@ async function stopRecording(): Promise<void> {
   }
 
   await stopTracks();
+  state.queue = [];
+  state.processingQueue = false;
   updateStatus('Idle', 'Idle');
 }
 
@@ -107,6 +184,18 @@ async function startRecording(deviceId?: string): Promise<void> {
   }
 
   await stopRecording();
+
+  state.seq = 0;
+  state.transcript = '';
+
+  broadcast({
+    type: 'TRANSCRIPT_UPDATE',
+    payload: {
+      seq: 0,
+      text: '',
+      transcript: '',
+    },
+  });
 
   const audioConstraint = state.selectedDeviceId === 'default' ? true : { deviceId: { exact: state.selectedDeviceId } };
 
@@ -124,26 +213,7 @@ async function startRecording(deviceId?: string): Promise<void> {
       return;
     }
 
-    const nextSeq = state.seq + 1;
-    state.seq = nextSeq;
-
-    blobToBase64(blob)
-      .then((dataBase64) => {
-        broadcast({
-          type: 'AUDIO_CHUNK',
-          payload: {
-            seq: nextSeq,
-            ts: Date.now(),
-            mimeType: blob.type || recorder.mimeType || 'audio/webm',
-            size: blob.size,
-            dataBase64,
-          },
-        });
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        publishError(message);
-      });
+    enqueueChunk(blob);
   };
 
   recorder.onerror = () => {
@@ -158,7 +228,7 @@ async function startRecording(deviceId?: string): Promise<void> {
 
   recorder.start(CHUNK_TIMESLICE_MS);
   state.recorder = recorder;
-  updateStatus('Recording', `Recording on ${state.selectedDeviceId}`);
+  updateStatus('Listening', `Listening on ${state.selectedDeviceId}`);
 }
 
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {
@@ -175,6 +245,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
       selectedDeviceId: state.selectedDeviceId,
       seq: state.seq,
       detail: state.detail,
+      transcript: state.transcript,
     });
     return;
   }

@@ -6,7 +6,7 @@ type AuthState = {
   userId?: string;
 };
 
-type AudioStatus = 'Idle' | 'Recording' | 'Error';
+type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
 type AppView = 'transcription' | 'notes';
 
 type DeviceOption = {
@@ -15,12 +15,13 @@ type DeviceOption = {
 };
 
 type RuntimeEventMessage =
-  | { type: 'AUDIO_CHUNK'; payload: { seq: number; ts: number; mimeType: string; size: number; dataBase64: string } }
+  | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
   | { type: 'ERROR'; payload: { message: string } };
 
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
+const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -147,6 +148,33 @@ async function persistSelectedDeviceId(deviceId: string): Promise<void> {
   });
 }
 
+async function readSttApiKey(): Promise<string> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    return window.localStorage.getItem(STT_API_KEY_STORAGE_KEY) ?? '';
+  }
+
+  return new Promise((resolve) => {
+    storage.get(STT_API_KEY_STORAGE_KEY, (items) => {
+      resolve((items[STT_API_KEY_STORAGE_KEY] as string | undefined) ?? '');
+    });
+  });
+}
+
+async function persistSttApiKey(apiKey: string): Promise<void> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    window.localStorage.setItem(STT_API_KEY_STORAGE_KEY, apiKey);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    storage.set({ [STT_API_KEY_STORAGE_KEY]: apiKey }, () => resolve());
+  });
+}
+
 async function queryStateFromOffscreen() {
   const sendMessage = chrome.runtime?.sendMessage as
     | ((message: { type: 'GET_AUDIO_STATE' }) => Promise<{
@@ -154,6 +182,7 @@ async function queryStateFromOffscreen() {
         detail?: string;
         selectedDeviceId?: string;
         seq?: number;
+        transcript?: string;
       }>)
     | undefined;
 
@@ -175,7 +204,9 @@ function App() {
   const [statusHint, setStatusHint] = useState('Idle');
   const [devices, setDevices] = useState<DeviceOption[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
-  const [chunkLines, setChunkLines] = useState<string[]>([]);
+  const [transcriptText, setTranscriptText] = useState('');
+  const [sttApiKeyInput, setSttApiKeyInput] = useState('');
+  const [sttKeySaved, setSttKeySaved] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -183,6 +214,11 @@ function App() {
       if (storedAuth?.token && storedAuth.email) {
         setAuth(storedAuth);
       }
+    });
+
+    readSttApiKey().then((key) => {
+      setSttApiKeyInput(key);
+      setSttKeySaved(Boolean(key));
     });
   }, []);
 
@@ -194,7 +230,7 @@ function App() {
     }
 
     transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [chunkLines]);
+  }, [transcriptText]);
 
   useEffect(() => {
     if (!auth || typeof chrome === 'undefined') {
@@ -217,6 +253,7 @@ function App() {
         setStatus(nextStatus);
         setStatusHint(snapshot.detail ?? nextStatus);
         setSelectedDeviceId(snapshot.selectedDeviceId ?? persistedDeviceId);
+        setTranscriptText(snapshot.transcript ?? '');
       } catch (syncError) {
         if (disposed) {
           return;
@@ -237,9 +274,8 @@ function App() {
         return;
       }
 
-      if (message.type === 'AUDIO_CHUNK') {
-        const kb = (message.payload.size / 1024).toFixed(1);
-        setChunkLines((current) => [...current, `Chunk #${message.payload.seq}: ${kb}KB (${message.payload.mimeType})`]);
+      if (message.type === 'TRANSCRIPT_UPDATE') {
+        setTranscriptText(message.payload.transcript);
         return;
       }
 
@@ -390,7 +426,7 @@ function App() {
     setStatus('Idle');
     setStatusHint('Idle');
     setActiveView('transcription');
-    setChunkLines([]);
+    setTranscriptText('');
   };
 
   const handleStartListening = async () => {
@@ -428,7 +464,7 @@ function App() {
       setSelectedDeviceId(deviceId);
       await persistSelectedDeviceId(deviceId);
 
-      if (status === 'Recording') {
+      if (status === 'Listening' || status === 'Transcribing') {
         await ensureOffscreenDocument();
         await sendControlMessage({ type: 'START_RECORDING', payload: { deviceId } });
       }
@@ -438,6 +474,13 @@ function App() {
       setStatusHint(message);
       setError(message);
     }
+  };
+
+  const handleSaveApiKey = async () => {
+    const trimmed = sttApiKeyInput.trim();
+    await persistSttApiKey(trimmed);
+    setSttApiKeyInput(trimmed);
+    setSttKeySaved(Boolean(trimmed));
   };
 
   if (auth) {
@@ -477,6 +520,27 @@ function App() {
             </div>
             <p className="status-row__hint">{statusHint}</p>
 
+            <p className="warning-text">Warning: audio chunks are sent to a cloud transcription API when an API key is set.</p>
+
+            <label className="form__label" htmlFor="stt-api-key">
+              Whisper API Key
+            </label>
+            <input
+              className="form__input"
+              id="stt-api-key"
+              onChange={(event) => {
+                setSttApiKeyInput(event.target.value);
+                setSttKeySaved(false);
+              }}
+              placeholder="sk-..."
+              type="password"
+              value={sttApiKeyInput}
+            />
+            <button className="button button--secondary" onClick={handleSaveApiKey} type="button">
+              Save API Key
+            </button>
+            <p className="status-row__hint">{sttKeySaved ? 'API key saved locally.' : 'No key saved. Using mock transcript mode.'}</p>
+
             <label className="form__label" htmlFor="microphone-device">
               Microphone
             </label>
@@ -505,13 +569,8 @@ function App() {
             {error && <p className="error">{error}</p>}
 
             <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-              {chunkLines.length === 0 ? <p className="transcript__line transcript__line--muted">No audio chunks yet. Start recording to begin.</p> : null}
-
-              {chunkLines.map((line, index) => (
-                <p className="transcript__line" key={`${line}-${index}`}>
-                  {line}
-                </p>
-              ))}
+              {!transcriptText ? <p className="transcript__line transcript__line--muted">No transcript yet. Start recording to begin.</p> : null}
+              {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
             </div>
           </section>
         ) : (

@@ -7,5 +7,6 @@
     "default_title": "ReadMe",
     "default_popup": "index.html"
   },
-  "permissions": ["storage", "offscreen"]
+  "permissions": ["storage", "offscreen"],
+  "host_permissions": ["https://api.openai.com/*"]
 }

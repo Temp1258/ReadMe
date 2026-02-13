@@ -73,3 +73,19 @@ From the `extension` directory:
 - `npm run dev` - starts the Vite development server
 - `npm run build` - type-checks and creates the production build
 - `npm run preview` - previews the built app locally
+
+## STT pipeline (Issue #13)
+
+The offscreen recorder now chunks audio every ~12 seconds and transcribes chunks in FIFO order via Whisper.
+
+### Set API key (MVP)
+
+1. Open the extension popup and sign in.
+2. In **Transcription**, paste your Whisper/OpenAI API key into **Whisper API Key**.
+3. Click **Save API Key** (stored in `chrome.storage.local`).
+4. Click **Start** to begin listening/transcribing.
+
+### Test without a real API key
+
+If no API key is saved, the extension skips network requests and appends mock lines such as `[mock] chunk 1 text`.
+This allows validating chunk ordering and live transcript UI without external dependencies.
