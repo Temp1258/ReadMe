@@ -7,6 +7,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: new URL('./index.html', import.meta.url).pathname,
+        options: new URL('./options.html', import.meta.url).pathname,
         offscreen: new URL('./src/offscreen.html', import.meta.url).pathname,
       },
     },
