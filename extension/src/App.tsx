@@ -906,7 +906,7 @@ function App() {
             </div>
             <p className="status-row__hint">{statusHint}</p>
 
-            <p className="warning-text">Warning: audio chunks are sent to a cloud transcription API when an API key is set.</p>
+            <p className="warning-text">Warning: recorded audio is sent to a cloud transcription API when an API key is set.</p>
 
             <label className="form__label" htmlFor="stt-api-key-status">
               Whisper API Key
