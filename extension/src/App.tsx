@@ -868,7 +868,7 @@ function App() {
         </section>
 
         {activeView === 'transcription' ? (
-          <section className="panel">
+          <section className="panel panel--transcription">
             <p className="panel__subtitle">Signed in as {auth.email}</p>
 
             <div className="status-row">
@@ -894,35 +894,41 @@ function App() {
               Open Settings
             </button>
 
-            <label className="form__label" htmlFor="audio-source">
-              Audio source
-            </label>
-            <select
-              className="form__input"
-              id="audio-source"
-              onChange={(event) => handleSourceChange(event.target.value === 'tab' ? 'tab' : 'mic')}
-              value={selectedSource}
-            >
-              <option value="mic">Microphone</option>
-              <option value="tab">Tab audio</option>
-            </select>
+            <div className="source-grid">
+              <div className="field-group">
+                <label className="form__label" htmlFor="audio-source">
+                  Audio source
+                </label>
+                <select
+                  className="form__input"
+                  id="audio-source"
+                  onChange={(event) => handleSourceChange(event.target.value === 'tab' ? 'tab' : 'mic')}
+                  value={selectedSource}
+                >
+                  <option value="mic">Microphone</option>
+                  <option value="tab">Tab audio</option>
+                </select>
+              </div>
 
-            <label className="form__label" htmlFor="microphone-device">
-              Microphone
-            </label>
-            <select
-              className="form__input"
-              disabled={selectedSource !== 'mic'}
-              id="microphone-device"
-              onChange={(event) => handleDeviceChange(event.target.value)}
-              value={selectedDeviceId}
-            >
-              {devices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.label}
-                </option>
-              ))}
-            </select>
+              <div className="field-group">
+                <label className="form__label" htmlFor="microphone-device">
+                  Microphone
+                </label>
+                <select
+                  className="form__input"
+                  disabled={selectedSource !== 'mic'}
+                  id="microphone-device"
+                  onChange={(event) => handleDeviceChange(event.target.value)}
+                  value={selectedDeviceId}
+                >
+                  {devices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             <div className="controls">
               <button className="button" onClick={handleStartListening} type="button">
@@ -944,7 +950,7 @@ function App() {
             </div>
           </section>
         ) : (
-          <section className="panel">
+          <section className="panel panel--notes">
             <div className="notes__toolbar">
               <h2>Notes</h2>
               <button className="button button--ghost" onClick={loadNotesSessions} type="button">
