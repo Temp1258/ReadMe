@@ -6,7 +6,7 @@ type AuthState = {
   userId?: string;
 };
 
-type TranscriptionStatus = 'Idle' | 'Listening' | 'Error';
+type AudioStatus = 'Idle' | 'Recording' | 'Error';
 type AppView = 'transcription' | 'notes';
 
 type DeviceOption = {
@@ -15,12 +15,12 @@ type DeviceOption = {
 };
 
 type RuntimeEventMessage =
-  | { type: 'TRANSCRIPT_PARTIAL'; payload: { text: string } }
-  | { type: 'TRANSCRIPT_FINAL'; payload: { text: string } }
-  | { type: 'STATUS_UPDATE'; payload: { status: TranscriptionStatus; detail?: string; deviceId: string } }
+  | { type: 'AUDIO_CHUNK'; payload: { seq: number; ts: number; mimeType: string; size: number; dataBase64: string } }
+  | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
   | { type: 'ERROR'; payload: { message: string } };
 
 const AUTH_STORAGE_KEY = 'auth';
+const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -55,7 +55,7 @@ async function ensureOffscreenDocument(): Promise<void> {
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT_PATH,
       reasons: [chrome.offscreen.Reason.USER_MEDIA],
-      justification: 'Run continuous speech transcription while popup is closed.',
+      justification: 'Run continuous microphone capture while popup is closed.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -120,11 +120,40 @@ async function clearAuthState(): Promise<void> {
   });
 }
 
+async function readSelectedDeviceId(): Promise<string> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    return window.localStorage.getItem(AUDIO_DEVICE_STORAGE_KEY) ?? 'default';
+  }
+
+  return new Promise((resolve) => {
+    storage.get(AUDIO_DEVICE_STORAGE_KEY, (items) => {
+      resolve((items[AUDIO_DEVICE_STORAGE_KEY] as string | undefined) ?? 'default');
+    });
+  });
+}
+
+async function persistSelectedDeviceId(deviceId: string): Promise<void> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    window.localStorage.setItem(AUDIO_DEVICE_STORAGE_KEY, deviceId);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    storage.set({ [AUDIO_DEVICE_STORAGE_KEY]: deviceId }, () => resolve());
+  });
+}
+
 async function queryStateFromOffscreen() {
   const sendMessage = chrome.runtime?.sendMessage as
-    | ((message: { type: 'GET_TRANSCRIPTION_STATE' }) => Promise<{
-        payload?: { status?: TranscriptionStatus; detail?: string; deviceId?: string };
-        transcript?: { partial?: string; finalized?: string[] };
+    | ((message: { type: 'GET_AUDIO_STATE' }) => Promise<{
+        status?: AudioStatus;
+        detail?: string;
+        selectedDeviceId?: string;
+        seq?: number;
       }>)
     | undefined;
 
@@ -132,7 +161,7 @@ async function queryStateFromOffscreen() {
     return null;
   }
 
-  return sendMessage({ type: 'GET_TRANSCRIPTION_STATE' });
+  return sendMessage({ type: 'GET_AUDIO_STATE' });
 }
 
 function App() {
@@ -142,12 +171,11 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>('transcription');
-  const [status, setStatus] = useState<TranscriptionStatus>('Idle');
+  const [status, setStatus] = useState<AudioStatus>('Idle');
   const [statusHint, setStatusHint] = useState('Idle');
   const [devices, setDevices] = useState<DeviceOption[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
-  const [partialTranscript, setPartialTranscript] = useState('');
-  const [transcriptLines, setTranscriptLines] = useState<string[]>([]);
+  const [chunkLines, setChunkLines] = useState<string[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -166,7 +194,7 @@ function App() {
     }
 
     transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [transcriptLines, partialTranscript]);
+  }, [chunkLines]);
 
   useEffect(() => {
     if (!auth || typeof chrome === 'undefined') {
@@ -179,20 +207,16 @@ function App() {
       try {
         await ensureOffscreenDocument();
         const snapshot = await queryStateFromOffscreen();
+        const persistedDeviceId = await readSelectedDeviceId();
+
         if (disposed || !snapshot) {
           return;
         }
 
-        const nextStatus = snapshot.payload?.status ?? 'Idle';
+        const nextStatus = snapshot.status ?? 'Idle';
         setStatus(nextStatus);
-        setStatusHint(snapshot.payload?.detail ?? nextStatus);
-
-        if (snapshot.payload?.deviceId) {
-          setSelectedDeviceId(snapshot.payload.deviceId);
-        }
-
-        setPartialTranscript(snapshot.transcript?.partial ?? '');
-        setTranscriptLines(snapshot.transcript?.finalized ?? []);
+        setStatusHint(snapshot.detail ?? nextStatus);
+        setSelectedDeviceId(snapshot.selectedDeviceId ?? persistedDeviceId);
       } catch (syncError) {
         if (disposed) {
           return;
@@ -209,18 +233,13 @@ function App() {
       if (message.type === 'STATUS_UPDATE') {
         setStatus(message.payload.status);
         setStatusHint(message.payload.detail ?? message.payload.status);
-        setSelectedDeviceId(message.payload.deviceId);
+        setSelectedDeviceId(message.payload.selectedDeviceId);
         return;
       }
 
-      if (message.type === 'TRANSCRIPT_PARTIAL') {
-        setPartialTranscript(message.payload.text);
-        return;
-      }
-
-      if (message.type === 'TRANSCRIPT_FINAL') {
-        setPartialTranscript('');
-        setTranscriptLines((current) => [...current, message.payload.text]);
+      if (message.type === 'AUDIO_CHUNK') {
+        const kb = (message.payload.size / 1024).toFixed(1);
+        setChunkLines((current) => [...current, `Chunk #${message.payload.seq}: ${kb}KB (${message.payload.mimeType})`]);
         return;
       }
 
@@ -278,7 +297,7 @@ function App() {
     };
   }, [auth]);
 
-  const sendControlMessage = async (message: { type: 'START_TRANSCRIPTION' | 'STOP_TRANSCRIPTION' } | { type: 'SET_DEVICE'; payload: { deviceId: string } }) => {
+  const sendControlMessage = async (message: { type: 'START_RECORDING'; payload?: { deviceId?: string } } | { type: 'STOP_RECORDING' }) => {
     const sendMessage = chrome.runtime?.sendMessage as ((payload: typeof message) => Promise<{ ok?: boolean; error?: string }>) | undefined;
     if (!sendMessage) {
       return;
@@ -371,8 +390,7 @@ function App() {
     setStatus('Idle');
     setStatusHint('Idle');
     setActiveView('transcription');
-    setPartialTranscript('');
-    setTranscriptLines([]);
+    setChunkLines([]);
   };
 
   const handleStartListening = async () => {
@@ -380,9 +398,9 @@ function App() {
 
     try {
       await ensureOffscreenDocument();
-      await sendControlMessage({ type: 'START_TRANSCRIPTION' });
+      await sendControlMessage({ type: 'START_RECORDING', payload: { deviceId: selectedDeviceId } });
     } catch (startError) {
-      const message = startError instanceof Error ? startError.message : 'Unable to start transcription.';
+      const message = startError instanceof Error ? startError.message : 'Unable to start recording.';
       setStatus('Error');
       setStatusHint(message);
       setError(message);
@@ -394,9 +412,9 @@ function App() {
 
     try {
       await ensureOffscreenDocument();
-      await sendControlMessage({ type: 'STOP_TRANSCRIPTION' });
+      await sendControlMessage({ type: 'STOP_RECORDING' });
     } catch (stopError) {
-      const message = stopError instanceof Error ? stopError.message : 'Unable to stop transcription.';
+      const message = stopError instanceof Error ? stopError.message : 'Unable to stop recording.';
       setStatus('Error');
       setStatusHint(message);
       setError(message);
@@ -404,15 +422,16 @@ function App() {
   };
 
   const handleDeviceChange = async (deviceId: string) => {
-    setSelectedDeviceId(deviceId);
     setError(null);
 
     try {
-      await ensureOffscreenDocument();
-      await sendControlMessage({
-        type: 'SET_DEVICE',
-        payload: { deviceId },
-      });
+      setSelectedDeviceId(deviceId);
+      await persistSelectedDeviceId(deviceId);
+
+      if (status === 'Recording') {
+        await ensureOffscreenDocument();
+        await sendControlMessage({ type: 'START_RECORDING', payload: { deviceId } });
+      }
     } catch (deviceError) {
       const message = deviceError instanceof Error ? deviceError.message : 'Unable to switch microphone.';
       setStatus('Error');
@@ -486,17 +505,13 @@ function App() {
             {error && <p className="error">{error}</p>}
 
             <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-              {transcriptLines.length === 0 && !partialTranscript ? (
-                <p className="transcript__line transcript__line--muted">No transcript yet. Start listening to begin.</p>
-              ) : null}
+              {chunkLines.length === 0 ? <p className="transcript__line transcript__line--muted">No audio chunks yet. Start recording to begin.</p> : null}
 
-              {transcriptLines.map((line, index) => (
+              {chunkLines.map((line, index) => (
                 <p className="transcript__line" key={`${line}-${index}`}>
                   {line}
                 </p>
               ))}
-
-              {partialTranscript ? <p className="transcript__line transcript__line--partial">{partialTranscript}</p> : null}
             </div>
           </section>
         ) : (
