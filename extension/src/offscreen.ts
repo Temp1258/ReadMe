@@ -24,6 +24,7 @@ type ChunkJob = {
 };
 
 const CHUNK_TIMESLICE_MS = 12_000;
+const MOCK_SEGMENT_INTERVAL_MS = 2_000;
 const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 
 const state = {
@@ -38,6 +39,8 @@ const state = {
   processingQueue: false,
   transcript: '',
   activeSessionId: null as string | null,
+  useMockTranscription: false,
+  mockSegmentTimer: null as number | null,
 };
 
 function toPersistedStatus(status: AudioStatus): PersistedStatus {
@@ -122,16 +125,17 @@ function enqueueChunk(blob: Blob): void {
   void processQueue();
 }
 
-function appendTranscript(seq: number, text: string): void {
+async function appendTranscript(seq: number, text: string): Promise<void> {
   const normalized = text.trim();
   if (!normalized) {
     return;
   }
 
-  state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
-
   if (state.activeSessionId) {
-    void appendSessionSegment(state.activeSessionId, normalized);
+    const persisted = await appendSessionSegment(state.activeSessionId, normalized);
+    state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${normalized}` : normalized);
+  } else {
+    state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
   }
 
   broadcast({
@@ -148,7 +152,7 @@ async function transcribeChunk(job: ChunkJob): Promise<void> {
   const apiKey = await getStoredApiKey();
 
   if (!apiKey) {
-    appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
+    await appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
     return;
   }
 
@@ -158,7 +162,7 @@ async function transcribeChunk(job: ChunkJob): Promise<void> {
     fileName: `chunk-${job.seq}.webm`,
   });
 
-  appendTranscript(job.seq, text || `[empty] chunk ${job.seq}`);
+  await appendTranscript(job.seq, text || `[empty] chunk ${job.seq}`);
 }
 
 async function processQueue(): Promise<void> {
@@ -195,9 +199,19 @@ async function processQueue(): Promise<void> {
   }
 }
 
+function stopMockSegmentTimer(): void {
+  if (state.mockSegmentTimer === null) {
+    return;
+  }
+
+  window.clearInterval(state.mockSegmentTimer);
+  state.mockSegmentTimer = null;
+}
+
 async function stopRecording(): Promise<void> {
   const recorder = state.recorder;
   state.recorder = null;
+  stopMockSegmentTimer();
 
   if (recorder && recorder.state !== 'inactive') {
     recorder.ondataavailable = null;
@@ -209,6 +223,7 @@ async function stopRecording(): Promise<void> {
   await stopTracks();
   state.queue = [];
   state.processingQueue = false;
+  state.useMockTranscription = false;
 
   if (state.activeSessionId) {
     void updateSessionState(state.activeSessionId, {
@@ -268,6 +283,8 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
+  const apiKey = await getStoredApiKey();
+  state.useMockTranscription = !apiKey;
 
   const sessionId = crypto.randomUUID();
   state.activeSessionId = sessionId;
@@ -283,6 +300,10 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 
   const recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (event) => {
+    if (state.useMockTranscription) {
+      return;
+    }
+
     const blob = event.data;
     if (!blob || blob.size === 0) {
       return;
@@ -301,7 +322,20 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
     }
   };
 
-  recorder.start(CHUNK_TIMESLICE_MS);
+  if (state.useMockTranscription) {
+    const appendMockSegment = () => {
+      const nextSeq = state.seq + 1;
+      state.seq = nextSeq;
+      void appendTranscript(nextSeq, `[mock] chunk ${nextSeq} text`);
+    };
+
+    appendMockSegment();
+    state.mockSegmentTimer = window.setInterval(appendMockSegment, MOCK_SEGMENT_INTERVAL_MS);
+    recorder.start();
+  } else {
+    recorder.start(CHUNK_TIMESLICE_MS);
+  }
+
   state.recorder = recorder;
   const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
   updateStatus('Listening', `Listening on ${sourceDetail}`);

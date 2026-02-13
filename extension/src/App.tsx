@@ -139,14 +139,12 @@ function buildMarkdownExport(session: SessionRecord): string {
 function buildJsonExport(session: SessionRecord): string {
   return JSON.stringify(
     {
-      metadata: {
-        id: session.id,
-        source: session.source,
-        status: session.status,
-        startedAt: session.startedAt,
-        endedAt: session.endedAt ?? null,
-        duration: formatExportDuration(session.startedAt, session.endedAt),
-      },
+      id: session.id,
+      source: session.source,
+      status: session.status,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt ?? null,
+      duration: session.endedAt ? session.endedAt - session.startedAt : null,
       transcript: session.transcript,
       segments: session.segments,
     },
@@ -412,6 +410,8 @@ function App() {
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
   const [notesSearch, setNotesSearch] = useState('');
+  const [exportToast, setExportToast] = useState<string | null>(null);
+  const exportToastTimerRef = useRef<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   const loadNotesSessions = async () => {
@@ -513,6 +513,11 @@ function App() {
         setStatusHint(message.payload.detail ?? message.payload.status);
         setSelectedDeviceId(message.payload.selectedDeviceId);
         setSelectedSource(message.payload.selectedSource);
+
+        if (activeView === 'notes' && message.payload.status === 'Idle') {
+          void loadNotesSessions();
+        }
+
         return;
       }
 
@@ -533,7 +538,7 @@ function App() {
       disposed = true;
       chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
     };
-  }, [auth]);
+  }, [activeView, auth]);
 
   useEffect(() => {
     if (!auth || activeView !== 'notes') {
@@ -807,9 +812,17 @@ function App() {
 
       const exportContent =
         format === 'txt' ? buildTxtExport(selectedSession) : format === 'md' ? buildMarkdownExport(selectedSession) : buildJsonExport(selectedSession);
-      const mimeType = format === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+      const mimeType = format === 'json' ? 'application/json' : 'text/plain;charset=utf-8';
+      const fileName = getExportFileName(selectedSession, format);
 
-      await downloadTextFile(getExportFileName(selectedSession, format), mimeType, exportContent);
+      await downloadTextFile(fileName, mimeType, exportContent);
+      setExportToast(`Downloaded: ${fileName}`);
+      if (exportToastTimerRef.current !== null) {
+        window.clearTimeout(exportToastTimerRef.current);
+      }
+      exportToastTimerRef.current = window.setTimeout(() => {
+        setExportToast(null);
+      }, 2000);
     } catch (exportError) {
       const message = exportError instanceof Error ? exportError.message : 'Unable to export this session.';
       setNotesError(message);
@@ -824,6 +837,15 @@ function App() {
 
     return notesSessions.filter((session) => session.transcript.toLowerCase().includes(query));
   }, [notesSearch, notesSessions]);
+
+
+  useEffect(() => {
+    return () => {
+      if (exportToastTimerRef.current !== null) {
+        window.clearTimeout(exportToastTimerRef.current);
+      }
+    };
+  }, []);
 
   const selectedSession = useMemo(() => {
     if (!selectedSessionId) {
@@ -1041,6 +1063,8 @@ function App() {
             </div>
           </section>
         )}
+
+        {exportToast ? <p className="toast">{exportToast}</p> : null}
       </main>
     );
   }
