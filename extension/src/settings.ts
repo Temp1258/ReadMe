@@ -1,10 +1,19 @@
 export type DefaultSource = 'microphone' | 'tab';
 
 export type ExtensionSettings = {
+  sttApiKey?: string;
   whisperApiKey?: string;
   openaiApiKey?: string;
   apiKey?: string;
+  apikey?: string;
   defaultSource?: DefaultSource;
+};
+
+export type ApiKeyFieldName = 'sttApiKey' | 'whisperApiKey' | 'openaiApiKey' | 'apiKey' | 'apikey';
+
+export type NormalizedApiKey = {
+  apiKey: string;
+  fieldName: ApiKeyFieldName | null;
 };
 
 export const SETTINGS_STORAGE_KEY = 'settings';
@@ -26,12 +35,31 @@ function normalizeSettings(settings: ExtensionSettings): ExtensionSettings {
     defaultSource: settings.defaultSource === 'tab' ? 'tab' : defaults.defaultSource,
   };
 
-  const whisperApiKey = settings.whisperApiKey?.trim() ?? settings.openaiApiKey?.trim() ?? settings.apiKey?.trim();
-  if (whisperApiKey) {
-    normalized.whisperApiKey = whisperApiKey;
+  const normalizedApiKey = getNormalizedApiKey(settings);
+  if (normalizedApiKey.apiKey) {
+    normalized.whisperApiKey = normalizedApiKey.apiKey;
   }
 
   return normalized;
+}
+
+export function getNormalizedApiKey(settings: ExtensionSettings): NormalizedApiKey {
+  const candidates: ApiKeyFieldName[] = ['sttApiKey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'];
+
+  for (const fieldName of candidates) {
+    const value = settings[fieldName]?.trim();
+    if (value) {
+      return {
+        apiKey: value,
+        fieldName,
+      };
+    }
+  }
+
+  return {
+    apiKey: '',
+    fieldName: null,
+  };
 }
 
 export async function getSettings(): Promise<ExtensionSettings> {

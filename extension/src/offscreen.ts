@@ -1,6 +1,6 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
 import { transcribeAudioBlob } from './stt/whisper';
-import { getSettings } from './settings';
+import { getNormalizedApiKey, getSettings } from './settings';
 
 export {};
 
@@ -110,9 +110,9 @@ async function stopTracks(): Promise<void> {
   state.activeStream = null;
 }
 
-async function getStoredApiKey(): Promise<string> {
+async function getStoredApiKey(): Promise<{ apiKey: string; fieldName: string | null }> {
   const settings = await getSettings();
-  return settings.whisperApiKey?.trim() ?? '';
+  return getNormalizedApiKey(settings);
 }
 
 function enqueueChunk(blob: Blob): void {
@@ -146,15 +146,16 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
 }
 
 async function transcribeChunk(job: ChunkJob): Promise<void> {
-  const apiKey = await getStoredApiKey();
+  const { apiKey, fieldName } = await getStoredApiKey();
+  console.info(`STT: key present = ${Boolean(apiKey)} (field=${fieldName ?? 'none'})`);
 
   if (!apiKey) {
-    console.info(`STT: using MOCK mode (chunk ${job.seq})`);
+    console.info('STT: using MOCK mode');
     await appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
     return;
   }
 
-  console.info(`STT: using REAL mode (chunk ${job.seq})`);
+  console.info('STT: using REAL mode');
 
   for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
     try {
@@ -293,8 +294,9 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
-  const apiKey = await getStoredApiKey();
+  const { apiKey, fieldName } = await getStoredApiKey();
   state.useMockTranscription = !apiKey;
+  console.info(`STT: key present = ${Boolean(apiKey)} (field=${fieldName ?? 'none'})`);
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();
