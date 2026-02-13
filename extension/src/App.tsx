@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
-import { getSettings } from './settings';
+import { getNormalizedApiKey, getSettings } from './settings';
 
 type AuthState = {
   token: string;
@@ -576,7 +576,12 @@ function App() {
   }, [auth]);
 
   const sendControlMessage = async (
-    message: { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string } } | { type: 'STOP_RECORDING' },
+    message:
+      | {
+          type: 'START_RECORDING';
+          payload?: { deviceId?: string; source?: AudioSource; streamId?: string; apiKey?: string; apiKeyFieldName?: string };
+        }
+      | { type: 'STOP_RECORDING' },
   ) => {
     const sendMessage = chrome.runtime?.sendMessage as ((payload: typeof message) => Promise<{ ok?: boolean; error?: string }>) | undefined;
     if (!sendMessage) {
@@ -702,10 +707,19 @@ function App() {
         });
       }
 
+      const settings = await getSettings();
+      const normalizedApiKey = getNormalizedApiKey(settings);
+
       await ensureOffscreenDocument();
       await sendControlMessage({
         type: 'START_RECORDING',
-        payload: { deviceId: selectedDeviceId, source: selectedSource, streamId },
+        payload: {
+          deviceId: selectedDeviceId,
+          source: selectedSource,
+          streamId,
+          apiKey: normalizedApiKey.apiKey,
+          apiKeyFieldName: normalizedApiKey.fieldName ?? undefined,
+        },
       });
     } catch (startError) {
       const message = startError instanceof Error ? startError.message : 'Unable to start recording.';
@@ -755,8 +769,19 @@ function App() {
       await persistSelectedDeviceId(deviceId);
 
       if (status === 'Listening' || status === 'Transcribing') {
+        const settings = await getSettings();
+        const normalizedApiKey = getNormalizedApiKey(settings);
+
         await ensureOffscreenDocument();
-        await sendControlMessage({ type: 'START_RECORDING', payload: { deviceId } });
+        await sendControlMessage({
+          type: 'START_RECORDING',
+          payload: {
+            deviceId,
+            source: selectedSource,
+            apiKey: normalizedApiKey.apiKey,
+            apiKeyFieldName: normalizedApiKey.fieldName ?? undefined,
+          },
+        });
       }
     } catch (deviceError) {
       const message = deviceError instanceof Error ? deviceError.message : 'Unable to switch microphone.';

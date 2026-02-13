@@ -1,6 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
 import { transcribeAudioBlob } from './stt/whisper';
-import { getNormalizedApiKey, getSettings } from './settings';
 
 export {};
 
@@ -11,7 +10,10 @@ type AudioSource = 'mic' | 'tab';
 type RuntimeMessage =
   | { type: 'PING' }
   | { type: 'GET_AUDIO_STATE' }
-  | { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string } }
+  | {
+      type: 'START_RECORDING';
+      payload?: { deviceId?: string; source?: AudioSource; streamId?: string; apiKey?: string; apiKeyFieldName?: string };
+    }
   | { type: 'STOP_RECORDING' };
 
 type RuntimeEventMessage =
@@ -27,6 +29,8 @@ type ChunkJob = {
 const CHUNK_TIMESLICE_MS = 12_000;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
+
+let inMemoryApiKey: string | null = null;
 
 const state = {
   status: 'Idle' as AudioStatus,
@@ -110,11 +114,6 @@ async function stopTracks(): Promise<void> {
   state.activeStream = null;
 }
 
-async function getStoredApiKey(): Promise<{ apiKey: string; fieldName: string | null }> {
-  const settings = await getSettings();
-  return getNormalizedApiKey(settings);
-}
-
 function enqueueChunk(blob: Blob): void {
   const nextSeq = state.seq + 1;
   state.seq = nextSeq;
@@ -146,16 +145,12 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
 }
 
 async function transcribeChunk(job: ChunkJob): Promise<void> {
-  const { apiKey, fieldName } = await getStoredApiKey();
-  console.info(`STT: key present = ${Boolean(apiKey)} (field=${fieldName ?? 'none'})`);
+  const apiKey = inMemoryApiKey;
 
   if (!apiKey) {
-    console.info('STT: using MOCK mode');
     await appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
     return;
   }
-
-  console.info('STT: using REAL mode');
 
   for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
     try {
@@ -235,6 +230,7 @@ async function stopRecording(): Promise<void> {
   state.queue = [];
   state.processingQueue = false;
   state.useMockTranscription = false;
+  inMemoryApiKey = null;
 
   if (state.activeSessionId) {
     void updateSessionState(state.activeSessionId, {
@@ -272,7 +268,7 @@ async function getAudioStream(source: AudioSource, streamId?: string): Promise<M
   });
 }
 
-async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string): Promise<void> {
+async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string, apiKey?: string): Promise<void> {
   if (deviceId) {
     state.selectedDeviceId = deviceId;
   }
@@ -294,9 +290,9 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
-  const { apiKey, fieldName } = await getStoredApiKey();
-  state.useMockTranscription = !apiKey;
-  console.info(`STT: key present = ${Boolean(apiKey)} (field=${fieldName ?? 'none'})`);
+  inMemoryApiKey = apiKey?.trim() || null;
+  console.info(`STT: key present = ${Boolean(inMemoryApiKey)} (source=message)`);
+  state.useMockTranscription = !inMemoryApiKey;
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();
@@ -359,7 +355,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
   }
 
   if (message?.type === 'START_RECORDING') {
-    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId)
+    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId, message.payload?.apiKey)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : String(error);
