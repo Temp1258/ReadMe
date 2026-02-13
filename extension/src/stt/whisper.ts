@@ -6,6 +6,18 @@ export type WhisperSettings = {
   maxRetries?: number;
 };
 
+export class WhisperApiError extends Error {
+  status: number;
+  apiMessage: string;
+
+  constructor(status: number, apiMessage: string) {
+    super(`Whisper API error (${status}): ${apiMessage}`);
+    this.name = 'WhisperApiError';
+    this.status = status;
+    this.apiMessage = apiMessage;
+  }
+}
+
 const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions';
 
 function wait(ms: number): Promise<void> {
@@ -36,10 +48,8 @@ async function callWhisper(blob: Blob, settings: WhisperSettings): Promise<strin
   const endpoint = settings.endpoint ?? DEFAULT_ENDPOINT;
   const extension = extensionForMimeType(blob.type || 'audio/webm');
   const fileName = settings.fileName ?? `audio.${extension}`;
-  const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
-
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', blob, fileName);
   formData.append('model', settings.model);
 
   const response = await fetch(endpoint, {
@@ -52,7 +62,7 @@ async function callWhisper(blob: Blob, settings: WhisperSettings): Promise<strin
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Whisper API error (${response.status}): ${body || response.statusText}`);
+    throw new WhisperApiError(response.status, body || response.statusText || 'Unknown error');
   }
 
   const data = (await response.json()) as { text?: string };

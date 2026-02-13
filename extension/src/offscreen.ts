@@ -1,5 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { transcribeAudioBlob } from './stt/whisper';
+import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
 
@@ -27,6 +27,7 @@ type ChunkJob = {
 };
 
 const CHUNK_TIMESLICE_MS = 12_000;
+const CHUNK_MIN_BYTES = 1_024;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -121,6 +122,36 @@ function enqueueChunk(blob: Blob): void {
   void processQueue();
 }
 
+function getChunkFilename(seq: number, mimeType: string): string {
+  const normalizedMimeType = mimeType.toLowerCase();
+
+  if (normalizedMimeType.includes('webm')) {
+    return `chunk-${seq}.webm`;
+  }
+
+  if (normalizedMimeType.includes('wav')) {
+    return `chunk-${seq}.wav`;
+  }
+
+  if (normalizedMimeType.includes('mp4') || normalizedMimeType.includes('m4a')) {
+    return `chunk-${seq}.m4a`;
+  }
+
+  return `chunk-${seq}.webm`;
+}
+
+function chooseRecorderMimeType(): string | undefined {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm'];
+
+  for (const mimeType of candidates) {
+    if (MediaRecorder.isTypeSupported(mimeType)) {
+      return mimeType;
+    }
+  }
+
+  return undefined;
+}
+
 async function appendTranscript(seq: number, text: string): Promise<void> {
   const normalized = text.trim();
   if (!normalized) {
@@ -146,6 +177,23 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
 
 async function transcribeChunk(job: ChunkJob): Promise<void> {
   const apiKey = inMemoryApiKey;
+  const blob = job.blob;
+
+  if (!blob) {
+    return;
+  }
+
+  if (blob.size === 0) {
+    console.info(`STT: chunk ${job.seq} skipped (empty) size=${blob.size} type=${blob.type || 'unknown'}`);
+    return;
+  }
+
+  if (blob.size < CHUNK_MIN_BYTES) {
+    console.info(`STT: chunk ${job.seq} skipped (too-small) size=${blob.size} type=${blob.type || 'unknown'}`);
+    return;
+  }
+
+  const filename = getChunkFilename(job.seq, blob.type || '');
 
   if (!apiKey) {
     await appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
@@ -154,11 +202,13 @@ async function transcribeChunk(job: ChunkJob): Promise<void> {
 
   for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
     try {
-      console.info(`STT: sending chunk ${job.seq} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`);
-      const text = await transcribeAudioBlob(job.blob, {
+      console.info(
+        `STT: preparing chunk ${job.seq} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
+      );
+      const text = await transcribeAudioBlob(blob, {
         apiKey,
         model: 'whisper-1',
-        fileName: `chunk-${job.seq}.webm`,
+        fileName: filename,
         maxRetries: 1,
       });
 
@@ -167,7 +217,27 @@ async function transcribeChunk(job: ChunkJob): Promise<void> {
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`STT: error for chunk ${job.seq} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`, message);
+      const status = error instanceof WhisperApiError ? error.status : 'unknown';
+      const apiMessage = error instanceof WhisperApiError ? error.apiMessage : message;
+      console.error(
+        `STT: error for chunk ${job.seq} status=${status} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
+        apiMessage,
+      );
+
+      if (
+        error instanceof WhisperApiError &&
+        error.status === 400 &&
+        error.apiMessage.toLowerCase().includes('invalid file format')
+      ) {
+        await appendTranscript(job.seq, `[skipped] chunk ${job.seq} invalid file format`);
+        return;
+      }
+
+      if (error instanceof WhisperApiError && error.status !== 429 && error.status < 500) {
+        await appendTranscript(job.seq, `[failed] chunk ${job.seq} status ${error.status}`);
+        publishError(`Chunk ${job.seq} failed with status ${error.status}.`);
+        return;
+      }
 
       if (attempt >= TRANSCRIBE_MAX_RETRIES) {
         await appendTranscript(job.seq, `[failed] chunk ${job.seq} after ${TRANSCRIBE_MAX_RETRIES} attempts`);
@@ -307,7 +377,9 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 
   state.activeStream = stream;
 
-  const recorder = new MediaRecorder(stream);
+  const selectedMimeType = chooseRecorderMimeType();
+  const recorder = selectedMimeType ? new MediaRecorder(stream, { mimeType: selectedMimeType }) : new MediaRecorder(stream);
+  console.info(`STT: recorder mimeType=${recorder.mimeType || 'default'}`);
   recorder.ondataavailable = (event) => {
     const blob = event.data;
     if (!blob || blob.size === 0) {
