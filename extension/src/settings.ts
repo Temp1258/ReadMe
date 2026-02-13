@@ -2,6 +2,8 @@ export type DefaultSource = 'microphone' | 'tab';
 
 export type ExtensionSettings = {
   whisperApiKey?: string;
+  openaiApiKey?: string;
+  apiKey?: string;
   defaultSource?: DefaultSource;
 };
 
@@ -24,7 +26,7 @@ function normalizeSettings(settings: ExtensionSettings): ExtensionSettings {
     defaultSource: settings.defaultSource === 'tab' ? 'tab' : defaults.defaultSource,
   };
 
-  const whisperApiKey = settings.whisperApiKey?.trim();
+  const whisperApiKey = settings.whisperApiKey?.trim() ?? settings.openaiApiKey?.trim() ?? settings.apiKey?.trim();
   if (whisperApiKey) {
     normalized.whisperApiKey = whisperApiKey;
   }
