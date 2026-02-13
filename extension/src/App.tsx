@@ -62,6 +62,132 @@ function formatSegmentOffset(startedAt: number, timestamp: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function formatFileTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function formatExportDuration(startedAt: number, endedAt?: number): string {
+  if (!endedAt || endedAt <= startedAt) {
+    return 'in-progress';
+  }
+
+  const totalMs = endedAt - startedAt;
+  const human = formatDuration(startedAt, endedAt);
+  return human ? `${human} (${totalMs}ms)` : `${totalMs}ms`;
+}
+
+function getExportFileName(session: SessionRecord, extension: string): string {
+  const safeSource = session.source.replace(/[^a-z0-9_-]/gi, '_');
+  const timestamp = formatFileTimestamp(session.startedAt);
+  return `ticnote_${safeSource}_${timestamp}.${extension}`;
+}
+
+function buildSessionMetadataLines(session: SessionRecord): string[] {
+  return [
+    `id: ${session.id}`,
+    `source: ${session.source}`,
+    `status: ${session.status}`,
+    `startedAt: ${formatTimestamp(session.startedAt)} (${session.startedAt})`,
+    `endedAt: ${session.endedAt ? `${formatTimestamp(session.endedAt)} (${session.endedAt})` : 'n/a'}`,
+    `duration: ${formatExportDuration(session.startedAt, session.endedAt)}`,
+  ];
+}
+
+function buildTxtExport(session: SessionRecord): string {
+  const metadata = buildSessionMetadataLines(session).join('\n');
+  const transcript = session.transcript || '(empty)';
+  const segments =
+    session.segments.length === 0
+      ? '(none)'
+      : session.segments.map((segment) => `#${segment.idx} | ${segment.ts} | ${segment.text}`).join('\n');
+
+  return [`Session Metadata`, metadata, '', 'Transcript', transcript, '', 'Segments', segments].join('\n');
+}
+
+function buildMarkdownExport(session: SessionRecord): string {
+  const metadataLines = buildSessionMetadataLines(session).map((line) => `- ${line}`).join('\n');
+  const transcript = session.transcript || '(empty)';
+  const segments =
+    session.segments.length === 0
+      ? '- (none)'
+      : session.segments.map((segment) => `- idx: ${segment.idx}, ts: ${segment.ts}, text: ${segment.text}`).join('\n');
+
+  return [
+    '# TicNote Session Export',
+    '',
+    '## Metadata',
+    metadataLines,
+    '',
+    '## Transcript',
+    '',
+    '```text',
+    transcript,
+    '```',
+    '',
+    '## Segments',
+    segments,
+  ].join('\n');
+}
+
+function buildJsonExport(session: SessionRecord): string {
+  return JSON.stringify(
+    {
+      metadata: {
+        id: session.id,
+        source: session.source,
+        status: session.status,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt ?? null,
+        duration: formatExportDuration(session.startedAt, session.endedAt),
+      },
+      transcript: session.transcript,
+      segments: session.segments,
+    },
+    null,
+    2,
+  );
+}
+
+async function downloadTextFile(filename: string, mimeType: string, content: string): Promise<void> {
+  const blob = new Blob([content], { type: mimeType });
+  const objectUrl = URL.createObjectURL(blob);
+
+  try {
+    const downloads = typeof chrome !== 'undefined' ? chrome.downloads : undefined;
+    if (downloads?.download) {
+      await new Promise<void>((resolve, reject) => {
+        downloads.download({ url: objectUrl, filename, saveAs: true }, () => {
+          const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
+          if (runtimeError) {
+            reject(new Error(runtimeError.message));
+            return;
+          }
+
+          resolve();
+        });
+      });
+
+      return;
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+}
+
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
@@ -671,6 +797,25 @@ function App() {
     }
   };
 
+  const handleExportSession = async (format: 'txt' | 'md' | 'json') => {
+    if (!selectedSession) {
+      return;
+    }
+
+    try {
+      setNotesError(null);
+
+      const exportContent =
+        format === 'txt' ? buildTxtExport(selectedSession) : format === 'md' ? buildMarkdownExport(selectedSession) : buildJsonExport(selectedSession);
+      const mimeType = format === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+
+      await downloadTextFile(getExportFileName(selectedSession, format), mimeType, exportContent);
+    } catch (exportError) {
+      const message = exportError instanceof Error ? exportError.message : 'Unable to export this session.';
+      setNotesError(message);
+    }
+  };
+
   const filteredSessions = useMemo(() => {
     const query = notesSearch.trim().toLowerCase();
     if (!query) {
@@ -853,7 +998,20 @@ function App() {
                   <p className="panel__body">Select a session to view details.</p>
                 ) : (
                   <>
-                    <h3>Transcript</h3>
+                    <div className="notes__toolbar">
+                      <h3>Transcript</h3>
+                      <div className="notes-detail__actions">
+                        <button className="button button--secondary" onClick={() => handleExportSession('txt')} type="button">
+                          Export TXT
+                        </button>
+                        <button className="button button--secondary" onClick={() => handleExportSession('md')} type="button">
+                          Export MD
+                        </button>
+                        <button className="button button--ghost" onClick={() => handleExportSession('json')} type="button">
+                          Export JSON
+                        </button>
+                      </div>
+                    </div>
                     <div className="transcript">
                       {selectedSession.transcript ? (
                         <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
