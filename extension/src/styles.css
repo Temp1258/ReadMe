@@ -325,6 +325,15 @@ h3 {
   word-break: break-word;
 }
 
+
+.notes-detail__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.notes-detail__actions .button {
+  margin-top: 0;
+}
 .notes-detail .transcript {
   margin-bottom: 10px;
   min-height: 110px;
