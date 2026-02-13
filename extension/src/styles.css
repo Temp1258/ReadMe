@@ -356,3 +356,18 @@ h3 {
   color: #4b5563;
   font-weight: 600;
 }
+
+
+.toast {
+  background: #111827;
+  border-radius: 8px;
+  bottom: 12px;
+  color: #ffffff;
+  font-size: 12px;
+  left: 12px;
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px;
+  position: fixed;
+  z-index: 20;
+}
