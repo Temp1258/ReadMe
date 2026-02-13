@@ -8,7 +8,7 @@ type AuthState = {
   userId?: string;
 };
 
-type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
+type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type AppView = 'transcription' | 'notes';
 type AudioSource = 'mic' | 'tab';
 
@@ -40,6 +40,10 @@ function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
 
   if (status === 'error') {
     return 'Error';
+  }
+
+  if (status === 'stopped') {
+    return 'Stopped';
   }
 
   return 'Idle';
@@ -497,7 +501,7 @@ function App() {
         setSelectedDeviceId(message.payload.selectedDeviceId);
         setSelectedSource(message.payload.selectedSource);
 
-        if (activeView === 'notes' && message.payload.status === 'Idle') {
+        if (activeView === 'notes' && (message.payload.status === 'Idle' || message.payload.status === 'Stopped')) {
           void loadNotesSessions();
         }
 

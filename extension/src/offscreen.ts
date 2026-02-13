@@ -4,7 +4,7 @@ import { getSettings } from './settings';
 
 export {};
 
-type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
+type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type PersistedStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'error';
 type AudioSource = 'mic' | 'tab';
 
@@ -25,7 +25,8 @@ type ChunkJob = {
 };
 
 const CHUNK_TIMESLICE_MS = 12_000;
-const MOCK_SEGMENT_INTERVAL_MS = 2_000;
+const TRANSCRIBE_MAX_RETRIES = 3;
+const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
 const state = {
   status: 'Idle' as AudioStatus,
@@ -40,7 +41,6 @@ const state = {
   transcript: '',
   activeSessionId: null as string | null,
   useMockTranscription: false,
-  mockSegmentTimer: null as number | null,
 };
 
 function toPersistedStatus(status: AudioStatus): PersistedStatus {
@@ -54,6 +54,10 @@ function toPersistedStatus(status: AudioStatus): PersistedStatus {
 
   if (status === 'Error') {
     return 'error';
+  }
+
+  if (status === 'Stopped') {
+    return 'stopped';
   }
 
   return 'idle';
@@ -145,17 +149,40 @@ async function transcribeChunk(job: ChunkJob): Promise<void> {
   const apiKey = await getStoredApiKey();
 
   if (!apiKey) {
+    console.info(`STT: using MOCK mode (chunk ${job.seq})`);
     await appendTranscript(job.seq, `[mock] chunk ${job.seq} text`);
     return;
   }
 
-  const text = await transcribeAudioBlob(job.blob, {
-    apiKey,
-    model: 'whisper-1',
-    fileName: `chunk-${job.seq}.webm`,
-  });
+  console.info(`STT: using REAL mode (chunk ${job.seq})`);
 
-  await appendTranscript(job.seq, text || `[empty] chunk ${job.seq}`);
+  for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
+    try {
+      console.info(`STT: sending chunk ${job.seq} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`);
+      const text = await transcribeAudioBlob(job.blob, {
+        apiKey,
+        model: 'whisper-1',
+        fileName: `chunk-${job.seq}.webm`,
+        maxRetries: 1,
+      });
+
+      console.info(`STT: received response for chunk ${job.seq}`);
+      await appendTranscript(job.seq, text || `[empty] chunk ${job.seq}`);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`STT: error for chunk ${job.seq} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`, message);
+
+      if (attempt >= TRANSCRIBE_MAX_RETRIES) {
+        await appendTranscript(job.seq, `[failed] chunk ${job.seq} after ${TRANSCRIBE_MAX_RETRIES} attempts`);
+        publishError(`Chunk ${job.seq} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
+        return;
+      }
+
+      const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
 }
 
 async function processQueue(): Promise<void> {
@@ -192,19 +219,9 @@ async function processQueue(): Promise<void> {
   }
 }
 
-function stopMockSegmentTimer(): void {
-  if (state.mockSegmentTimer === null) {
-    return;
-  }
-
-  window.clearInterval(state.mockSegmentTimer);
-  state.mockSegmentTimer = null;
-}
-
 async function stopRecording(): Promise<void> {
   const recorder = state.recorder;
   state.recorder = null;
-  stopMockSegmentTimer();
 
   if (recorder && recorder.state !== 'inactive') {
     recorder.ondataavailable = null;
@@ -226,7 +243,7 @@ async function stopRecording(): Promise<void> {
     state.activeSessionId = null;
   }
 
-  updateStatus('Idle', 'Idle');
+  updateStatus('Stopped', 'Stopped');
 }
 
 async function getAudioStream(source: AudioSource, streamId?: string): Promise<MediaStream> {
@@ -278,6 +295,7 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   const stream = await getAudioStream(state.selectedSource, streamId);
   const apiKey = await getStoredApiKey();
   state.useMockTranscription = !apiKey;
+  console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();
   state.activeSessionId = sessionId;
@@ -293,10 +311,6 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 
   const recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (event) => {
-    if (state.useMockTranscription) {
-      return;
-    }
-
     const blob = event.data;
     if (!blob || blob.size === 0) {
       return;
@@ -315,19 +329,7 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
     }
   };
 
-  if (state.useMockTranscription) {
-    const appendMockSegment = () => {
-      const nextSeq = state.seq + 1;
-      state.seq = nextSeq;
-      void appendTranscript(nextSeq, `[mock] chunk ${nextSeq} text`);
-    };
-
-    appendMockSegment();
-    state.mockSegmentTimer = window.setInterval(appendMockSegment, MOCK_SEGMENT_INTERVAL_MS);
-    recorder.start();
-  } else {
-    recorder.start(CHUNK_TIMESLICE_MS);
-  }
+  recorder.start(CHUNK_TIMESLICE_MS);
 
   state.recorder = recorder;
   const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
