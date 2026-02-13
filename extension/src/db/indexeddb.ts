@@ -61,7 +61,7 @@ async function putSession(session: SessionRecord): Promise<void> {
   await transactionDone(tx);
 }
 
-async function getSession(id: string): Promise<SessionRecord | null> {
+export async function getSession(id: string): Promise<SessionRecord | null> {
   const db = await openDb();
 
   return new Promise((resolve, reject) => {
@@ -74,6 +74,25 @@ async function getSession(id: string): Promise<SessionRecord | null> {
 
     request.onerror = () => {
       reject(request.error ?? new Error('Unable to read session from IndexedDB.'));
+    };
+  });
+}
+
+export async function listSessions(): Promise<SessionRecord[]> {
+  const db = await openDb();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const request = tx.objectStore(STORE_NAME).getAll();
+
+    request.onsuccess = () => {
+      const sessions = (request.result as SessionRecord[] | undefined) ?? [];
+      sessions.sort((a, b) => b.startedAt - a.startedAt);
+      resolve(sessions);
+    };
+
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to list sessions from IndexedDB.'));
     };
   });
 }

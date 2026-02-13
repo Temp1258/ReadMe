@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { clearSessions, getLatestSession, type SessionStatus } from './db/indexeddb';
+import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
 
 type AuthState = {
   token: string;
@@ -34,6 +34,28 @@ function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
   }
 
   return 'Idle';
+}
+
+function formatTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleString();
+}
+
+function formatDuration(startedAt: number, endedAt?: number): string | null {
+  if (!endedAt || endedAt <= startedAt) {
+    return null;
+  }
+
+  const totalSeconds = Math.floor((endedAt - startedAt) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+function formatSegmentOffset(startedAt: number, timestamp: number): string {
+  const offsetSeconds = Math.max(0, Math.floor((timestamp - startedAt) / 1000));
+  const minutes = Math.floor(offsetSeconds / 60);
+  const seconds = offsetSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 const AUTH_STORAGE_KEY = 'auth';
@@ -224,7 +246,39 @@ function App() {
   const [transcriptText, setTranscriptText] = useState('');
   const [sttApiKeyInput, setSttApiKeyInput] = useState('');
   const [sttKeySaved, setSttKeySaved] = useState(false);
+  const [notesSessions, setNotesSessions] = useState<SessionRecord[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [notesSearch, setNotesSearch] = useState('');
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+
+  const loadNotesSessions = async () => {
+    setNotesLoading(true);
+    setNotesError(null);
+
+    try {
+      const sessions = await listSessions();
+      setNotesSessions(sessions);
+      if (sessions.length === 0) {
+        setSelectedSessionId(null);
+        return;
+      }
+
+      setSelectedSessionId((currentSelected) => {
+        if (currentSelected && sessions.some((session) => session.id === currentSelected)) {
+          return currentSelected;
+        }
+
+        return sessions[0].id;
+      });
+    } catch (notesLoadError) {
+      const message = notesLoadError instanceof Error ? notesLoadError.message : 'Unable to load notes.';
+      setNotesError(message);
+    } finally {
+      setNotesLoading(false);
+    }
+  };
 
   useEffect(() => {
     readAuthState().then((storedAuth) => {
@@ -316,6 +370,14 @@ function App() {
       chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
     };
   }, [auth]);
+
+  useEffect(() => {
+    if (!auth || activeView !== 'notes') {
+      return;
+    }
+
+    loadNotesSessions();
+  }, [activeView, auth]);
 
   useEffect(() => {
     if (!auth) {
@@ -515,11 +577,30 @@ function App() {
       setTranscriptText('');
       setStatus('Idle');
       setStatusHint('Cleared local session data.');
+      setNotesSessions([]);
+      setSelectedSessionId(null);
     } catch (clearError) {
       const message = clearError instanceof Error ? clearError.message : 'Unable to clear local session data.';
       setError(message);
     }
   };
+
+  const filteredSessions = useMemo(() => {
+    const query = notesSearch.trim().toLowerCase();
+    if (!query) {
+      return notesSessions;
+    }
+
+    return notesSessions.filter((session) => session.transcript.toLowerCase().includes(query));
+  }, [notesSearch, notesSessions]);
+
+  const selectedSession = useMemo(() => {
+    if (!selectedSessionId) {
+      return filteredSessions[0] ?? null;
+    }
+
+    return filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0] ?? null;
+  }, [filteredSessions, selectedSessionId]);
 
   if (auth) {
     return (
@@ -616,8 +697,90 @@ function App() {
           </section>
         ) : (
           <section className="panel">
-            <h2>Notes</h2>
-            <p className="panel__body">Notes is a placeholder entry point for the next MVP step.</p>
+            <div className="notes__toolbar">
+              <h2>Notes</h2>
+              <button className="button button--ghost" onClick={loadNotesSessions} type="button">
+                Refresh
+              </button>
+            </div>
+
+            <label className="form__label" htmlFor="notes-search">
+              Search transcript
+            </label>
+            <input
+              className="form__input"
+              id="notes-search"
+              onChange={(event) => setNotesSearch(event.target.value)}
+              placeholder="Filter by transcript text"
+              type="search"
+              value={notesSearch}
+            />
+
+            {notesError ? <p className="error">{notesError}</p> : null}
+            {notesLoading ? <p className="panel__body">Loading sessions...</p> : null}
+
+            <div className="notes-layout">
+              <div className="notes-list" role="list">
+                {!filteredSessions.length ? <p className="panel__body">No sessions found.</p> : null}
+                {filteredSessions.map((session) => {
+                  const preview = session.transcript.trim() ? session.transcript.slice(0, 60) : '(no transcript yet)';
+                  const duration = formatDuration(session.startedAt, session.endedAt);
+
+                  return (
+                    <button
+                      aria-pressed={selectedSession?.id === session.id}
+                      className={`notes-list__item ${selectedSession?.id === session.id ? 'notes-list__item--active' : ''}`}
+                      key={session.id}
+                      onClick={() => setSelectedSessionId(session.id)}
+                      type="button"
+                    >
+                      <div className="notes-list__title-row">
+                        <p className="notes-list__time">{formatTimestamp(session.startedAt)}</p>
+                        <span className={`status-indicator status-indicator--${session.status}`}>{session.status}</span>
+                      </div>
+                      <p className="notes-list__meta">
+                        {session.source}
+                        {duration ? ` • ${duration}` : ''}
+                      </p>
+                      <p className="notes-list__preview">{preview}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="notes-detail">
+                {!selectedSession ? (
+                  <p className="panel__body">Select a session to view details.</p>
+                ) : (
+                  <>
+                    <h3>Transcript</h3>
+                    <div className="transcript">
+                      {selectedSession.transcript ? (
+                        <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
+                      ) : (
+                        <p className="transcript__line transcript__line--muted">No transcript yet.</p>
+                      )}
+                    </div>
+
+                    <h3>Segments</h3>
+                    {selectedSession.segments.length === 0 ? (
+                      <p className="panel__body">No segments yet.</p>
+                    ) : (
+                      <ul className="notes-segments">
+                        {selectedSession.segments.map((segment) => (
+                          <li key={segment.idx}>
+                            <span className="notes-segments__meta">
+                              #{segment.idx} • {formatSegmentOffset(selectedSession.startedAt, segment.ts)}
+                            </span>{' '}
+                            {segment.text}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
           </section>
         )}
       </main>
