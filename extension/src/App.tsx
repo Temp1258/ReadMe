@@ -9,6 +9,7 @@ type AuthState = {
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
 type AppView = 'transcription' | 'notes';
+type AudioSource = 'mic' | 'tab';
 
 type DeviceOption = {
   id: string;
@@ -17,7 +18,10 @@ type DeviceOption = {
 
 type RuntimeEventMessage =
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
-  | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
+  | {
+      type: 'STATUS_UPDATE';
+      payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number };
+    }
   | { type: 'ERROR'; payload: { message: string } };
 
 function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
@@ -60,6 +64,7 @@ function formatSegmentOffset(startedAt: number, timestamp: number): string {
 
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
+const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
 const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
@@ -174,6 +179,34 @@ async function readSelectedDeviceId(): Promise<string> {
   });
 }
 
+async function readSelectedAudioSource(): Promise<AudioSource> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    return (window.localStorage.getItem(AUDIO_SOURCE_STORAGE_KEY) as AudioSource | null) ?? 'mic';
+  }
+
+  return new Promise((resolve) => {
+    storage.get(AUDIO_SOURCE_STORAGE_KEY, (items) => {
+      const stored = items[AUDIO_SOURCE_STORAGE_KEY];
+      resolve(stored === 'tab' ? 'tab' : 'mic');
+    });
+  });
+}
+
+async function persistSelectedAudioSource(source: AudioSource): Promise<void> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    window.localStorage.setItem(AUDIO_SOURCE_STORAGE_KEY, source);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    storage.set({ [AUDIO_SOURCE_STORAGE_KEY]: source }, () => resolve());
+  });
+}
+
 async function persistSelectedDeviceId(deviceId: string): Promise<void> {
   const storage = getStorageArea();
 
@@ -220,6 +253,7 @@ async function queryStateFromOffscreen() {
         status?: AudioStatus;
         detail?: string;
         selectedDeviceId?: string;
+        selectedSource?: AudioSource;
         seq?: number;
         transcript?: string;
       }>)
@@ -243,6 +277,7 @@ function App() {
   const [statusHint, setStatusHint] = useState('Idle');
   const [devices, setDevices] = useState<DeviceOption[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
+  const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
   const [transcriptText, setTranscriptText] = useState('');
   const [sttApiKeyInput, setSttApiKeyInput] = useState('');
   const [sttKeySaved, setSttKeySaved] = useState(false);
@@ -313,9 +348,10 @@ function App() {
     const syncState = async () => {
       try {
         await ensureOffscreenDocument();
-        const [snapshot, persistedDeviceId, latestSession] = await Promise.all([
+        const [snapshot, persistedDeviceId, persistedAudioSource, latestSession] = await Promise.all([
           queryStateFromOffscreen(),
           readSelectedDeviceId(),
+          readSelectedAudioSource(),
           getLatestSession(),
         ]);
 
@@ -331,6 +367,7 @@ function App() {
         setStatus(nextStatus);
         setStatusHint(nextHint);
         setSelectedDeviceId(snapshot?.selectedDeviceId ?? persistedDeviceId);
+        setSelectedSource(snapshot?.selectedSource ?? persistedAudioSource);
         setTranscriptText(liveTranscript || latestSession?.transcript || '');
       } catch (syncError) {
         if (disposed) {
@@ -349,6 +386,7 @@ function App() {
         setStatus(message.payload.status);
         setStatusHint(message.payload.detail ?? message.payload.status);
         setSelectedDeviceId(message.payload.selectedDeviceId);
+        setSelectedSource(message.payload.selectedSource);
         return;
       }
 
@@ -419,7 +457,9 @@ function App() {
     };
   }, [auth]);
 
-  const sendControlMessage = async (message: { type: 'START_RECORDING'; payload?: { deviceId?: string } } | { type: 'STOP_RECORDING' }) => {
+  const sendControlMessage = async (
+    message: { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string } } | { type: 'STOP_RECORDING' },
+  ) => {
     const sendMessage = chrome.runtime?.sendMessage as ((payload: typeof message) => Promise<{ ok?: boolean; error?: string }>) | undefined;
     if (!sendMessage) {
       return;
@@ -519,10 +559,56 @@ function App() {
     setError(null);
 
     try {
+      let streamId: string | undefined;
+      if (selectedSource === 'tab') {
+        streamId = await new Promise<string>((resolve, reject) => {
+          if (!chrome.tabCapture?.getMediaStreamId) {
+            reject(new Error('Tab audio capture is not available in this browser.'));
+            return;
+          }
+
+          chrome.tabCapture.getMediaStreamId({ targetTabId: undefined }, (capturedStreamId) => {
+            const runtimeError = chrome.runtime.lastError;
+            if (runtimeError) {
+              reject(new Error(runtimeError.message));
+              return;
+            }
+
+            if (!capturedStreamId) {
+              reject(new Error('Unable to capture active tab audio stream.'));
+              return;
+            }
+
+            resolve(capturedStreamId);
+          });
+        });
+      }
+
       await ensureOffscreenDocument();
-      await sendControlMessage({ type: 'START_RECORDING', payload: { deviceId: selectedDeviceId } });
+      await sendControlMessage({
+        type: 'START_RECORDING',
+        payload: { deviceId: selectedDeviceId, source: selectedSource, streamId },
+      });
     } catch (startError) {
       const message = startError instanceof Error ? startError.message : 'Unable to start recording.';
+      setStatus('Error');
+      setStatusHint(message);
+      setError(message);
+    }
+  };
+
+  const handleSourceChange = async (source: AudioSource) => {
+    setError(null);
+
+    try {
+      setSelectedSource(source);
+      await persistSelectedAudioSource(source);
+
+      if (status === 'Listening' || status === 'Transcribing') {
+        await handleStartListening();
+      }
+    } catch (sourceError) {
+      const message = sourceError instanceof Error ? sourceError.message : 'Unable to switch audio source.';
       setStatus('Error');
       setStatusHint(message);
       setError(message);
@@ -660,11 +746,25 @@ function App() {
             </button>
             <p className="status-row__hint">{sttKeySaved ? 'API key saved locally.' : 'No key saved. Using mock transcript mode.'}</p>
 
+            <label className="form__label" htmlFor="audio-source">
+              Audio source
+            </label>
+            <select
+              className="form__input"
+              id="audio-source"
+              onChange={(event) => handleSourceChange(event.target.value === 'tab' ? 'tab' : 'mic')}
+              value={selectedSource}
+            >
+              <option value="mic">Microphone</option>
+              <option value="tab">Tab audio</option>
+            </select>
+
             <label className="form__label" htmlFor="microphone-device">
               Microphone
             </label>
             <select
               className="form__input"
+              disabled={selectedSource !== 'mic'}
               id="microphone-device"
               onChange={(event) => handleDeviceChange(event.target.value)}
               value={selectedDeviceId}

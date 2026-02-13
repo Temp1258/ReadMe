@@ -5,15 +5,16 @@ export {};
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Error';
 type PersistedStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'error';
+type AudioSource = 'mic' | 'tab';
 
 type RuntimeMessage =
   | { type: 'PING' }
   | { type: 'GET_AUDIO_STATE' }
-  | { type: 'START_RECORDING'; payload?: { deviceId?: string } }
+  | { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string } }
   | { type: 'STOP_RECORDING' };
 
 type RuntimeEventMessage =
-  | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
+  | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number } }
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'ERROR'; payload: { message: string } };
 
@@ -29,6 +30,7 @@ const state = {
   status: 'Idle' as AudioStatus,
   detail: 'Idle',
   selectedDeviceId: 'default',
+  selectedSource: 'mic' as AudioSource,
   seq: 0,
   activeStream: null as MediaStream | null,
   recorder: null as MediaRecorder | null,
@@ -81,6 +83,7 @@ function updateStatus(status: AudioStatus, detail?: string): void {
       status: state.status,
       detail: state.detail,
       selectedDeviceId: state.selectedDeviceId,
+      selectedSource: state.selectedSource,
       seq: state.seq,
     },
   });
@@ -183,7 +186,8 @@ async function processQueue(): Promise<void> {
       }
 
       if (state.recorder && state.recorder.state !== 'inactive') {
-        updateStatus('Listening', `Listening on ${state.selectedDeviceId}`);
+        const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
+        updateStatus('Listening', `Listening on ${sourceDetail}`);
       }
     }
   } finally {
@@ -217,10 +221,37 @@ async function stopRecording(): Promise<void> {
   updateStatus('Idle', 'Idle');
 }
 
-async function startRecording(deviceId?: string): Promise<void> {
+async function getAudioStream(source: AudioSource, streamId?: string): Promise<MediaStream> {
+  if (source === 'tab') {
+    if (!streamId) {
+      throw new Error('Missing tab capture stream id. Start from the popup Start button.');
+    }
+
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: streamId,
+        },
+      } as MediaTrackConstraints,
+      video: false,
+    });
+  }
+
+  const audioConstraint = state.selectedDeviceId === 'default' ? true : { deviceId: { exact: state.selectedDeviceId } };
+
+  return navigator.mediaDevices.getUserMedia({
+    audio: audioConstraint,
+    video: false,
+  });
+}
+
+async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string): Promise<void> {
   if (deviceId) {
     state.selectedDeviceId = deviceId;
   }
+
+  state.selectedSource = source;
 
   await stopRecording();
 
@@ -236,19 +267,14 @@ async function startRecording(deviceId?: string): Promise<void> {
     },
   });
 
-  const audioConstraint = state.selectedDeviceId === 'default' ? true : { deviceId: { exact: state.selectedDeviceId } };
-
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: audioConstraint,
-    video: false,
-  });
+  const stream = await getAudioStream(state.selectedSource, streamId);
 
   const sessionId = crypto.randomUUID();
   state.activeSessionId = sessionId;
   await createSession({
     id: sessionId,
     startedAt: Date.now(),
-    source: 'mic',
+    source: state.selectedSource,
     deviceId: state.selectedDeviceId,
     status: 'listening',
   });
@@ -277,7 +303,8 @@ async function startRecording(deviceId?: string): Promise<void> {
 
   recorder.start(CHUNK_TIMESLICE_MS);
   state.recorder = recorder;
-  updateStatus('Listening', `Listening on ${state.selectedDeviceId}`);
+  const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
+  updateStatus('Listening', `Listening on ${sourceDetail}`);
 }
 
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {
@@ -292,6 +319,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
     sendResponse({
       status: state.status,
       selectedDeviceId: state.selectedDeviceId,
+      selectedSource: state.selectedSource,
       seq: state.seq,
       detail: state.detail,
       transcript: state.transcript,
@@ -300,7 +328,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
   }
 
   if (message?.type === 'START_RECORDING') {
-    startRecording(message.payload?.deviceId)
+    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : String(error);

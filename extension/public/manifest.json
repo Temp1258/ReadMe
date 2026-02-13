@@ -7,6 +7,12 @@
     "default_title": "ReadMe",
     "default_popup": "index.html"
   },
-  "permissions": ["storage", "offscreen"],
-  "host_permissions": ["https://api.openai.com/*"]
+  "permissions": [
+    "offscreen",
+    "storage",
+    "tabCapture"
+  ],
+  "host_permissions": [
+    "https://api.openai.com/*"
+  ]
 }
