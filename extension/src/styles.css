@@ -371,3 +371,14 @@ h3 {
   position: fixed;
   z-index: 20;
 }
+
+.options-page {
+  margin: 0 auto;
+  max-width: 560px;
+}
+
+.success {
+  color: #166534;
+  font-size: 13px;
+  margin: 4px 0;
+}

@@ -1,5 +1,6 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
 import { transcribeAudioBlob } from './stt/whisper';
+import { getSettings } from './settings';
 
 export {};
 
@@ -25,7 +26,6 @@ type ChunkJob = {
 
 const CHUNK_TIMESLICE_MS = 12_000;
 const MOCK_SEGMENT_INTERVAL_MS = 2_000;
-const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 
 const state = {
   status: 'Idle' as AudioStatus,
@@ -107,15 +107,8 @@ async function stopTracks(): Promise<void> {
 }
 
 async function getStoredApiKey(): Promise<string> {
-  if (!chrome.storage?.local) {
-    return '';
-  }
-
-  return new Promise((resolve) => {
-    chrome.storage.local.get(STT_API_KEY_STORAGE_KEY, (items) => {
-      resolve((items[STT_API_KEY_STORAGE_KEY] as string | undefined)?.trim() ?? '');
-    });
-  });
+  const settings = await getSettings();
+  return settings.whisperApiKey?.trim() ?? '';
 }
 
 function enqueueChunk(blob: Blob): void {

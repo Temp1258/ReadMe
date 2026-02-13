@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
+import { getSettings } from './settings';
 
 type AuthState = {
   token: string;
@@ -23,6 +24,10 @@ type RuntimeEventMessage =
       payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number };
     }
   | { type: 'ERROR'; payload: { message: string } };
+
+function settingsSourceToAudioSource(source?: string): AudioSource {
+  return source === 'tab' ? 'tab' : 'mic';
+}
 
 function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
   if (status === 'listening') {
@@ -189,7 +194,6 @@ async function downloadTextFile(filename: string, mimeType: string, content: str
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
-const STT_API_KEY_STORAGE_KEY = 'sttApiKey';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -304,16 +308,23 @@ async function readSelectedDeviceId(): Promise<string> {
 }
 
 async function readSelectedAudioSource(): Promise<AudioSource> {
+  const settings = await getSettings();
+  const fallbackSource = settingsSourceToAudioSource(settings.defaultSource);
   const storage = getStorageArea();
 
   if (!storage) {
-    return (window.localStorage.getItem(AUDIO_SOURCE_STORAGE_KEY) as AudioSource | null) ?? 'mic';
+    return (window.localStorage.getItem(AUDIO_SOURCE_STORAGE_KEY) as AudioSource | null) ?? fallbackSource;
   }
 
   return new Promise((resolve) => {
     storage.get(AUDIO_SOURCE_STORAGE_KEY, (items) => {
       const stored = items[AUDIO_SOURCE_STORAGE_KEY];
-      resolve(stored === 'tab' ? 'tab' : 'mic');
+      if (stored === 'tab' || stored === 'mic') {
+        resolve(stored);
+        return;
+      }
+
+      resolve(fallbackSource);
     });
   });
 }
@@ -341,33 +352,6 @@ async function persistSelectedDeviceId(deviceId: string): Promise<void> {
 
   await new Promise<void>((resolve) => {
     storage.set({ [AUDIO_DEVICE_STORAGE_KEY]: deviceId }, () => resolve());
-  });
-}
-
-async function readSttApiKey(): Promise<string> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    return window.localStorage.getItem(STT_API_KEY_STORAGE_KEY) ?? '';
-  }
-
-  return new Promise((resolve) => {
-    storage.get(STT_API_KEY_STORAGE_KEY, (items) => {
-      resolve((items[STT_API_KEY_STORAGE_KEY] as string | undefined) ?? '');
-    });
-  });
-}
-
-async function persistSttApiKey(apiKey: string): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    window.localStorage.setItem(STT_API_KEY_STORAGE_KEY, apiKey);
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    storage.set({ [STT_API_KEY_STORAGE_KEY]: apiKey }, () => resolve());
   });
 }
 
@@ -403,8 +387,7 @@ function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
   const [transcriptText, setTranscriptText] = useState('');
-  const [sttApiKeyInput, setSttApiKeyInput] = useState('');
-  const [sttKeySaved, setSttKeySaved] = useState(false);
+  const [whisperApiKey, setWhisperApiKey] = useState('');
   const [notesSessions, setNotesSessions] = useState<SessionRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -448,9 +431,9 @@ function App() {
       }
     });
 
-    readSttApiKey().then((key) => {
-      setSttApiKeyInput(key);
-      setSttKeySaved(Boolean(key));
+    getSettings().then((settings) => {
+      setWhisperApiKey(settings.whisperApiKey ?? '');
+      setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
     });
   }, []);
 
@@ -779,11 +762,13 @@ function App() {
     }
   };
 
-  const handleSaveApiKey = async () => {
-    const trimmed = sttApiKeyInput.trim();
-    await persistSttApiKey(trimmed);
-    setSttApiKeyInput(trimmed);
-    setSttKeySaved(Boolean(trimmed));
+  const handleOpenSettings = async () => {
+    if (chrome.runtime?.openOptionsPage) {
+      await chrome.runtime.openOptionsPage();
+      return;
+    }
+
+    window.open(chrome.runtime.getURL('options.html'), '_blank');
   };
 
   const handleClearSessionData = async () => {
@@ -894,24 +879,20 @@ function App() {
 
             <p className="warning-text">Warning: audio chunks are sent to a cloud transcription API when an API key is set.</p>
 
-            <label className="form__label" htmlFor="stt-api-key">
+            <label className="form__label" htmlFor="stt-api-key-status">
               Whisper API Key
             </label>
             <input
               className="form__input"
-              id="stt-api-key"
-              onChange={(event) => {
-                setSttApiKeyInput(event.target.value);
-                setSttKeySaved(false);
-              }}
-              placeholder="sk-..."
+              id="stt-api-key-status"
+              readOnly
               type="password"
-              value={sttApiKeyInput}
+              value={whisperApiKey || 'not-configured'}
             />
-            <button className="button button--secondary" onClick={handleSaveApiKey} type="button">
-              Save API Key
+            <p className="status-row__hint">{whisperApiKey ? 'Using API key from settings.' : 'No key saved. Using mock transcript mode.'}</p>
+            <button className="button button--secondary" onClick={handleOpenSettings} type="button">
+              Open Settings
             </button>
-            <p className="status-row__hint">{sttKeySaved ? 'API key saved locally.' : 'No key saved. Using mock transcript mode.'}</p>
 
             <label className="form__label" htmlFor="audio-source">
               Audio source
