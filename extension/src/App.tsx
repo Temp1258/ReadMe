@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { clearSessions, getLatestSession, type SessionStatus } from './db/indexeddb';
 
 type AuthState = {
   token: string;
@@ -18,6 +19,22 @@ type RuntimeEventMessage =
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; seq: number } }
   | { type: 'ERROR'; payload: { message: string } };
+
+function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
+  if (status === 'listening') {
+    return 'Listening';
+  }
+
+  if (status === 'transcribing') {
+    return 'Transcribing';
+  }
+
+  if (status === 'error') {
+    return 'Error';
+  }
+
+  return 'Idle';
+}
 
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
@@ -242,18 +259,25 @@ function App() {
     const syncState = async () => {
       try {
         await ensureOffscreenDocument();
-        const snapshot = await queryStateFromOffscreen();
-        const persistedDeviceId = await readSelectedDeviceId();
+        const [snapshot, persistedDeviceId, latestSession] = await Promise.all([
+          queryStateFromOffscreen(),
+          readSelectedDeviceId(),
+          getLatestSession(),
+        ]);
 
-        if (disposed || !snapshot) {
+        if (disposed) {
           return;
         }
 
-        const nextStatus = snapshot.status ?? 'Idle';
+        const fallbackStatus = latestSession ? mapSessionStatusToAudioStatus(latestSession.status) : 'Idle';
+        const nextStatus = snapshot?.status ?? fallbackStatus;
+        const nextHint = snapshot?.detail ?? (latestSession ? `Last session status: ${latestSession.status}` : nextStatus);
+        const liveTranscript = snapshot?.transcript ?? '';
+
         setStatus(nextStatus);
-        setStatusHint(snapshot.detail ?? nextStatus);
-        setSelectedDeviceId(snapshot.selectedDeviceId ?? persistedDeviceId);
-        setTranscriptText(snapshot.transcript ?? '');
+        setStatusHint(nextHint);
+        setSelectedDeviceId(snapshot?.selectedDeviceId ?? persistedDeviceId);
+        setTranscriptText(liveTranscript || latestSession?.transcript || '');
       } catch (syncError) {
         if (disposed) {
           return;
@@ -483,6 +507,20 @@ function App() {
     setSttKeySaved(Boolean(trimmed));
   };
 
+  const handleClearSessionData = async () => {
+    setError(null);
+
+    try {
+      await clearSessions();
+      setTranscriptText('');
+      setStatus('Idle');
+      setStatusHint('Cleared local session data.');
+    } catch (clearError) {
+      const message = clearError instanceof Error ? clearError.message : 'Unable to clear local session data.';
+      setError(message);
+    }
+  };
+
   if (auth) {
     return (
       <main className="popup">
@@ -563,6 +601,9 @@ function App() {
               </button>
               <button className="button button--secondary" onClick={handleStopListening} type="button">
                 Stop
+              </button>
+              <button className="button button--ghost" onClick={handleClearSessionData} type="button">
+                Clear data
               </button>
             </div>
 
