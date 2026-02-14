@@ -911,7 +911,10 @@ function App() {
     return (
       <main className="popup">
         <header className="popup__header">
-          <h1>ReadMe</h1>
+          <div>
+            <h1>ReadMe</h1>
+            <p className="subtitle subtitle--compact">Quick transcription capture</p>
+          </div>
           <button className="button button--ghost" onClick={handleLogout} type="button">
             Logout
           </button>
@@ -936,81 +939,88 @@ function App() {
 
         {activeView === 'transcription' ? (
           <section className="panel panel--transcription">
-            <p className="panel__subtitle">Signed in as {auth.email}</p>
+            <div className="panel panel--subtle panel--status">
+              <p className="panel__subtitle">Signed in as {auth.email}</p>
 
-            <div className="status-row">
-              <p className="status-row__label">Status</p>
-              <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
+              <div className="status-row">
+                <p className="status-row__label">Status</p>
+                <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
+              </div>
+              <p className="status-row__hint">{statusHint}</p>
+
+              <p className="warning-text">Warning: recorded audio is sent to a cloud transcription API when an API key is set.</p>
             </div>
-            <p className="status-row__hint">{statusHint}</p>
 
-            <p className="warning-text">Warning: recorded audio is sent to a cloud transcription API when an API key is set.</p>
-
-            <p className="status-row__hint">{sttStatusLine}</p>
-            <button className="button button--secondary" onClick={handleOpenSettings} type="button">
-              Open Settings
-            </button>
-
-            <div className="source-grid">
-              <div className="field-group">
-                <label className="form__label" htmlFor="audio-source">
-                  Audio source
-                </label>
-                <select
-                  className="form__input"
-                  disabled={isAudioSourceLocked}
-                  id="audio-source"
-                  onChange={(event) =>
-                    handleSourceChange(parseAudioSourceInput(event.target.value))
-                  }
-                  value={selectedSource}
-                >
-                  <option value="mic">Microphone</option>
-                  <option value="tab">Tab audio</option>
-                  <option value="mix">Mix (tab + mic)</option>
-                </select>
-                <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
-                {isAudioSourceLocked ? <p className="status-row__hint">Audio source is locked while recording. Stop to change.</p> : null}
+            <section className="panel panel--subtle panel--controls">
+              <div className="control-bar">
+                <button className="button button--primary" onClick={handleStartListening} type="button">
+                  Start
+                </button>
+                <button className="button button--secondary" onClick={handleStopListening} type="button">
+                  Stop
+                </button>
+                <button className="button button--ghost" onClick={handleClearSessionData} type="button">
+                  Clear data
+                </button>
+                <button className="button button--secondary" onClick={handleOpenSettings} type="button">
+                  Open Settings
+                </button>
               </div>
 
-              <div className="field-group">
-                <label className="form__label" htmlFor="microphone-device">
-                  Microphone
-                </label>
-                <select
-                  className="form__input"
-                  disabled={isMicrophoneLocked}
-                  id="microphone-device"
-                  onChange={(event) => handleDeviceChange(event.target.value)}
-                  value={selectedDeviceId}
-                >
-                  {devices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+              <p className="status-row__hint">{sttStatusLine}</p>
 
-            <div className="controls">
-              <button className="button" onClick={handleStartListening} type="button">
-                Start
-              </button>
-              <button className="button button--secondary" onClick={handleStopListening} type="button">
-                Stop
-              </button>
-              <button className="button button--ghost" onClick={handleClearSessionData} type="button">
-                Clear data
-              </button>
-            </div>
+              <div className="source-grid">
+                <div className="field-group">
+                  <label className="form__label" htmlFor="audio-source">
+                    Audio source
+                  </label>
+                  <select
+                    className="form__input"
+                    disabled={isAudioSourceLocked}
+                    id="audio-source"
+                    onChange={(event) =>
+                      handleSourceChange(parseAudioSourceInput(event.target.value))
+                    }
+                    value={selectedSource}
+                  >
+                    <option value="mic">Microphone</option>
+                    <option value="tab">Tab audio</option>
+                    <option value="mix">Mix (tab + mic)</option>
+                  </select>
+                  <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
+                  {isAudioSourceLocked ? <p className="status-row__hint">Audio source is locked while recording. Stop to change.</p> : null}
+                </div>
+
+                <div className="field-group">
+                  <label className="form__label" htmlFor="microphone-device">
+                    Microphone
+                  </label>
+                  <select
+                    className="form__input"
+                    disabled={isMicrophoneLocked}
+                    id="microphone-device"
+                    onChange={(event) => handleDeviceChange(event.target.value)}
+                    value={selectedDeviceId}
+                  >
+                    {devices.map((device) => (
+                      <option key={device.id} value={device.id}>
+                        {device.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </section>
 
             {error && <p className="error">{error}</p>}
 
-            <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-              {!transcriptText ? <p className="transcript__line transcript__line--muted">No transcript yet. Start recording to begin.</p> : null}
-              {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
-            </div>
+            <section className="panel panel--subtle panel--transcript">
+              <h2>Transcript</h2>
+              <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
+                {!transcriptText ? <p className="transcript__line transcript__line--muted">No transcript yet. Start recording to begin.</p> : null}
+                {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
+              </div>
+            </section>
           </section>
         ) : (
           <section className="panel panel--notes">
