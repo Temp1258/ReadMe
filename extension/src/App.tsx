@@ -377,27 +377,26 @@ async function persistSelectedDeviceId(deviceId: string): Promise<void> {
 }
 
 
-async function getSttDiagnosticsFromRuntime(): Promise<{ label: string; error?: string }> {
+async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: string; configurationLabel: string; error?: string }> {
   const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
 
   if (!sendMessage) {
-    return { label: 'Not configured', error: 'Runtime messaging unavailable.' };
+    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: 'Runtime messaging unavailable.' };
   }
 
   try {
     const response = await sendMessage({ type: 'GET_STT_SETTINGS' });
     if (!response.ok) {
-      return { label: 'Not configured', error: response.error || 'Unable to read STT settings.' };
+      return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: response.error || 'Unable to read STT settings.' };
     }
 
-    if (response.provider === 'openai' && response.keyPresent && response.last4) {
-      return { label: `Configured (****${response.last4})` };
-    }
+    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : 'Mock';
+    const configurationLabel = response.provider === 'openai' && response.keyPresent ? 'Configured' : 'Not configured';
 
-    return { label: 'Not configured' };
+    return { providerLabel, configurationLabel };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to read STT settings.';
-    return { label: 'Not configured', error: message };
+    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: message };
   }
 }
 
@@ -433,7 +432,7 @@ function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
   const [transcriptText, setTranscriptText] = useState('');
-  const [sttConfiguredLabel, setSttConfiguredLabel] = useState('Not configured');
+  const [sttStatusLine, setSttStatusLine] = useState('Provider: Unknown · Not configured');
   const [notesSessions, setNotesSessions] = useState<SessionRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -478,7 +477,7 @@ function App() {
     });
 
     Promise.all([loadSettings(), getSttDiagnosticsFromRuntime()]).then(([settings, sttSummary]) => {
-      setSttConfiguredLabel(sttSummary.label);
+      setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
       if (sttSummary.error) {
         setError(sttSummary.error);
       }
@@ -945,19 +944,7 @@ function App() {
 
             <p className="warning-text">Warning: recorded audio is sent to a cloud transcription API when an API key is set.</p>
 
-            <label className="form__label" htmlFor="stt-api-key-status">
-              Whisper API Key
-            </label>
-            <input
-              className="form__input"
-              id="stt-api-key-status"
-              readOnly
-              type="text"
-              value={sttConfiguredLabel}
-            />
-            <p className="status-row__hint">
-              {sttConfiguredLabel.startsWith('Configured') ? 'Using API key from settings.' : 'No key saved. Using mock transcript mode.'}
-            </p>
+            <p className="status-row__hint">{sttStatusLine}</p>
             <button className="button button--secondary" onClick={handleOpenSettings} type="button">
               Open Settings
             </button>
