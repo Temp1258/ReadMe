@@ -1,5 +1,4 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { loadSttSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -23,6 +22,19 @@ type RuntimeEventMessage =
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'ERROR'; payload: { message: string } };
 
+
+type GetSttSettingsResponse =
+  | {
+      ok: true;
+      provider: 'openai' | 'mock';
+      apiKey?: string | null;
+      keyPresent: boolean;
+      last4?: string | null;
+      detectedFrom?: string | null;
+      backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
+    }
+  | { ok: false; error: string; backend: 'none' };
+
 const CHUNK_TIMESLICE_MS = 12_000;
 const CHUNK_MIN_BYTES = 1_024;
 const TRANSCRIBE_MAX_RETRIES = 3;
@@ -45,17 +57,25 @@ const state = {
 };
 
 async function refreshSttRuntimeSettings(): Promise<void> {
-  const sttSettings = await loadSttSettings();
-  const apiKey = sttSettings.apiKey?.trim() ?? '';
-  const keyPresent = sttSettings.provider === 'openai' && Boolean(apiKey);
-  const provider = keyPresent ? 'openai' : 'mock';
-  inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
+  const response = (await chrome.runtime.sendMessage({ type: 'GET_STT_SETTINGS' })) as GetSttSettingsResponse;
+
+  if (!response?.ok) {
+    const message = response?.error ?? 'Unable to fetch STT settings';
+    inMemoryApiKey = null;
+    state.useMockTranscription = true;
+    console.warn(`STT: settings unavailable backend=none error=${message}`);
+    return;
+  }
+
+  const apiKey = response.apiKey?.trim() ?? '';
+  const provider = response.provider === 'openai' && apiKey ? 'openai' : 'mock';
+
+  inMemoryApiKey = provider === 'openai' ? apiKey : null;
   state.useMockTranscription = provider === 'mock';
 
   console.info(
-    `STT: backend=${sttSettings.backend} provider=${provider} keyPresent=${keyPresent} detectedFrom=${sttSettings.detectedFrom}`,
+    `STT: backend=${response.backend} provider=${provider} keyPresent=${response.keyPresent} last4=${response.last4 ?? 'n/a'} detectedFrom=${response.detectedFrom ?? 'none'}`,
   );
-
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 }
 
@@ -404,15 +424,6 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 }
 
 
-if (chrome.storage?.onChanged) {
-  chrome.storage.onChanged.addListener(() => {
-    void refreshSttRuntimeSettings().catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`STT: failed to refresh settings from storage change: ${message}`);
-    });
-  });
-}
-
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {
   const message = rawMessage;
 
@@ -464,4 +475,10 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
       });
     return true;
   }
+});
+
+
+void refreshSttRuntimeSettings().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`STT: initial settings refresh failed: ${message}`);
 });

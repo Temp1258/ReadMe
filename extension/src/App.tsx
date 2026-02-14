@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
-import { getSttCredentialSummary, loadSettings } from './settings';
+import { loadSettings } from './settings';
 
 type AuthState = {
   token: string;
@@ -24,6 +24,23 @@ type RuntimeEventMessage =
       payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number };
     }
   | { type: 'ERROR'; payload: { message: string } };
+
+
+type GetSttSettingsResponse =
+  | {
+      ok: true;
+      provider: 'openai' | 'mock';
+      apiKey?: string | null;
+      keyPresent: boolean;
+      last4?: string | null;
+      detectedFrom?: string | null;
+      backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
+    }
+  | {
+      ok: false;
+      error: string;
+      backend: 'none';
+    };
 
 function settingsSourceToAudioSource(source?: string): AudioSource {
   return source === 'tab' ? 'tab' : 'mic';
@@ -359,6 +376,31 @@ async function persistSelectedDeviceId(deviceId: string): Promise<void> {
   });
 }
 
+
+async function getSttDiagnosticsFromRuntime(): Promise<{ label: string; error?: string }> {
+  const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
+
+  if (!sendMessage) {
+    return { label: 'Not configured', error: 'Runtime messaging unavailable.' };
+  }
+
+  try {
+    const response = await sendMessage({ type: 'GET_STT_SETTINGS' });
+    if (!response.ok) {
+      return { label: 'Not configured', error: response.error || 'Unable to read STT settings.' };
+    }
+
+    if (response.provider === 'openai' && response.keyPresent && response.last4) {
+      return { label: `Configured (****${response.last4})` };
+    }
+
+    return { label: 'Not configured' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to read STT settings.';
+    return { label: 'Not configured', error: message };
+  }
+}
+
 async function queryStateFromOffscreen() {
   const sendMessage = chrome.runtime?.sendMessage as
     | ((message: { type: 'GET_AUDIO_STATE' }) => Promise<{
@@ -435,9 +477,11 @@ function App() {
       }
     });
 
-    Promise.all([loadSettings(), getSttCredentialSummary()]).then(([settings, sttSummary]) => {
-      const label = sttSummary.configured ? `Configured (****${sttSummary.last4 ?? ''})` : 'Not configured';
-      setSttConfiguredLabel(label);
+    Promise.all([loadSettings(), getSttDiagnosticsFromRuntime()]).then(([settings, sttSummary]) => {
+      setSttConfiguredLabel(sttSummary.label);
+      if (sttSummary.error) {
+        setError(sttSummary.error);
+      }
       setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
     });
   }, []);
