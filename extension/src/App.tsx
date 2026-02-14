@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
-import { getNormalizedApiKey, getSettings } from './settings';
+import { getSettings, getSttCredentialSummary } from './settings';
 
 type AuthState = {
   token: string;
@@ -391,7 +391,7 @@ function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
   const [transcriptText, setTranscriptText] = useState('');
-  const [whisperApiKey, setWhisperApiKey] = useState('');
+  const [sttConfiguredLabel, setSttConfiguredLabel] = useState('Not configured');
   const [notesSessions, setNotesSessions] = useState<SessionRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -436,7 +436,9 @@ function App() {
     });
 
     getSettings().then((settings) => {
-      setWhisperApiKey(settings.whisperApiKey ?? '');
+      const sttSummary = getSttCredentialSummary(settings);
+      const label = sttSummary.keyPresent ? `Configured (${sttSummary.maskedApiKey})` : 'Not configured';
+      setSttConfiguredLabel(label);
       setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
     });
   }, []);
@@ -579,7 +581,7 @@ function App() {
     message:
       | {
           type: 'START_RECORDING';
-          payload?: { deviceId?: string; source?: AudioSource; streamId?: string; apiKey?: string; apiKeyFieldName?: string };
+          payload?: { deviceId?: string; source?: AudioSource; streamId?: string; keyPresent?: boolean; provider?: string };
         }
       | { type: 'STOP_RECORDING' },
   ) => {
@@ -708,7 +710,7 @@ function App() {
       }
 
       const settings = await getSettings();
-      const normalizedApiKey = getNormalizedApiKey(settings);
+      const sttSummary = getSttCredentialSummary(settings);
 
       await ensureOffscreenDocument();
       await sendControlMessage({
@@ -717,8 +719,8 @@ function App() {
           deviceId: selectedDeviceId,
           source: selectedSource,
           streamId,
-          apiKey: normalizedApiKey.apiKey,
-          apiKeyFieldName: normalizedApiKey.fieldName ?? undefined,
+          keyPresent: sttSummary.keyPresent,
+          provider: sttSummary.provider,
         },
       });
     } catch (startError) {
@@ -770,7 +772,7 @@ function App() {
 
       if (status === 'Listening' || status === 'Transcribing') {
         const settings = await getSettings();
-        const normalizedApiKey = getNormalizedApiKey(settings);
+        const sttSummary = getSttCredentialSummary(settings);
 
         await ensureOffscreenDocument();
         await sendControlMessage({
@@ -778,8 +780,8 @@ function App() {
           payload: {
             deviceId,
             source: selectedSource,
-            apiKey: normalizedApiKey.apiKey,
-            apiKeyFieldName: normalizedApiKey.fieldName ?? undefined,
+            keyPresent: sttSummary.keyPresent,
+            provider: sttSummary.provider,
           },
         });
       }
@@ -915,10 +917,12 @@ function App() {
               className="form__input"
               id="stt-api-key-status"
               readOnly
-              type="password"
-              value={whisperApiKey || 'not-configured'}
+              type="text"
+              value={sttConfiguredLabel}
             />
-            <p className="status-row__hint">{whisperApiKey ? 'Using API key from settings.' : 'No key saved. Using mock transcript mode.'}</p>
+            <p className="status-row__hint">
+              {sttConfiguredLabel.startsWith('Configured') ? 'Using API key from settings.' : 'No key saved. Using mock transcript mode.'}
+            </p>
             <button className="button button--secondary" onClick={handleOpenSettings} type="button">
               Open Settings
             </button>

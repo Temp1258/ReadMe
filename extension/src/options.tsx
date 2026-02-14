@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { defaults, getSettings, saveSettings, type DefaultSource } from './settings';
+import { defaults, getSettings, getSttCredentialSummary, maskSecret, saveSettings, type DefaultSource } from './settings';
 import './styles.css';
 
 function OptionsPage() {
-  const [whisperApiKey, setWhisperApiKey] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [storedApiKey, setStoredApiKey] = useState('');
   const [defaultSource, setDefaultSource] = useState<DefaultSource>(defaults.defaultSource);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +14,8 @@ function OptionsPage() {
 
   useEffect(() => {
     getSettings().then((settings) => {
-      setWhisperApiKey(settings.whisperApiKey ?? '');
+      const summary = getSttCredentialSummary(settings);
+      setStoredApiKey(summary.apiKey);
       setDefaultSource(settings.defaultSource ?? defaults.defaultSource);
     });
   }, []);
@@ -23,21 +25,27 @@ function OptionsPage() {
     setError(null);
     setStatusMessage(null);
 
-    const trimmedKey = whisperApiKey.trim();
+    const trimmedKey = apiKeyInput.trim();
 
-    if (whisperApiKey.length > 0 && trimmedKey.length === 0) {
+    if (apiKeyInput.length > 0 && trimmedKey.length === 0) {
       setError('Whisper API key cannot be only whitespace.');
       return;
     }
+
+    const nextApiKey = trimmedKey || storedApiKey;
 
     setIsSaving(true);
 
     try {
       await saveSettings({
-        whisperApiKey: trimmedKey || undefined,
         defaultSource,
+        stt: {
+          provider: nextApiKey ? 'openai' : 'mock',
+          apiKey: nextApiKey || undefined,
+        },
       });
-      setWhisperApiKey(trimmedKey);
+      setStoredApiKey(nextApiKey);
+      setApiKeyInput('');
       setStatusMessage('Settings saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to save settings.');
@@ -45,6 +53,30 @@ function OptionsPage() {
       setIsSaving(false);
     }
   };
+
+  const handleClearApiKey = async () => {
+    setError(null);
+    setStatusMessage(null);
+    setIsSaving(true);
+
+    try {
+      await saveSettings({
+        defaultSource,
+        stt: {
+          provider: 'mock',
+        },
+      });
+      setStoredApiKey('');
+      setApiKeyInput('');
+      setStatusMessage('API key cleared.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Unable to clear API key.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const keySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
 
   return (
     <main className="popup options-page">
@@ -54,16 +86,21 @@ function OptionsPage() {
 
       <section className="panel">
         <form className="form" onSubmit={handleSubmit}>
+          <label className="form__label" htmlFor="whisper-api-key-status">
+            Whisper API Key status
+          </label>
+          <input className="form__input" id="whisper-api-key-status" readOnly type="text" value={keySummary} />
+
           <label className="form__label" htmlFor="whisper-api-key">
-            Whisper API Key
+            New Whisper API Key (optional)
           </label>
           <input
             className="form__input"
             id="whisper-api-key"
-            onChange={(event) => setWhisperApiKey(event.target.value)}
+            onChange={(event) => setApiKeyInput(event.target.value)}
             placeholder="sk-..."
             type="password"
-            value={whisperApiKey}
+            value={apiKeyInput}
           />
 
           <label className="form__label" htmlFor="default-source">
@@ -81,6 +118,9 @@ function OptionsPage() {
 
           <button className="button" disabled={isSaving} type="submit">
             {isSaving ? 'Saving...' : 'Save'}
+          </button>
+          <button className="button button--secondary" disabled={isSaving || !storedApiKey} onClick={handleClearApiKey} type="button">
+            Clear API key
           </button>
 
           {statusMessage ? <p className="success">{statusMessage}</p> : null}
