@@ -1,4 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
+import { getSettings, getSttCredentialSummary } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -12,7 +13,7 @@ type RuntimeMessage =
   | { type: 'GET_AUDIO_STATE' }
   | {
       type: 'START_RECORDING';
-      payload?: { deviceId?: string; source?: AudioSource; streamId?: string; apiKey?: string; apiKeyFieldName?: string };
+      payload?: { deviceId?: string; source?: AudioSource; streamId?: string; keyPresent?: boolean; provider?: string };
     }
   | { type: 'STOP_RECORDING' };
 
@@ -321,7 +322,7 @@ async function getAudioStream(source: AudioSource, streamId?: string): Promise<M
   });
 }
 
-async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string, apiKey?: string): Promise<void> {
+async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string): Promise<void> {
   if (deviceId) {
     state.selectedDeviceId = deviceId;
   }
@@ -343,9 +344,11 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
-  inMemoryApiKey = apiKey?.trim() || null;
-  console.info(`STT: key present = ${Boolean(inMemoryApiKey)} (source=message)`);
-  state.useMockTranscription = !inMemoryApiKey;
+  const settings = await getSettings();
+  const sttCredentials = getSttCredentialSummary(settings);
+  inMemoryApiKey = sttCredentials.apiKey || null;
+  console.info(`STT: settings loaded provider=${sttCredentials.provider} keyPresent=${sttCredentials.keyPresent}`);
+  state.useMockTranscription = !sttCredentials.keyPresent || sttCredentials.provider === 'mock';
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();
@@ -410,7 +413,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
   }
 
   if (message?.type === 'START_RECORDING') {
-    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId, message.payload?.apiKey)
+    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : String(error);
