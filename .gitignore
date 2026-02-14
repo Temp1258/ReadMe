@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 extension/vite.config.js
 extension/vite.config.d.ts
+
+make_icons.py
+
