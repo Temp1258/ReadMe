@@ -9,8 +9,10 @@ type AuthState = {
 };
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
-type AppView = 'transcription' | 'notes';
+type AppView = 'transcription' | 'notes' | 'settings';
 type AudioSource = 'mic' | 'tab' | 'mix';
+type UITheme = 'light' | 'dark';
+type UILang = 'en' | 'zh';
 
 type DeviceOption = {
   id: string;
@@ -206,6 +208,8 @@ async function downloadTextFile(filename: string, mimeType: string, content: str
 const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
+const UI_THEME_STORAGE_KEY = 'uiTheme';
+const UI_LANG_STORAGE_KEY = 'uiLang';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -255,6 +259,122 @@ type ChromeStorageArea = {
   set: (items: Record<string, unknown>, callback?: () => void) => void;
   remove: (keys: string | string[], callback?: () => void) => void;
 };
+
+const UI_COPY = {
+  en: {
+    appTitle: 'ReadMe',
+    subtitle: 'Quick transcription capture',
+    tabsTranscription: 'Transcription',
+    tabsNotes: 'Notes',
+    tabsSettings: 'Settings',
+    status: 'Status',
+    warningOneLine: 'Warning: audio may be sent to a cloud transcription API.',
+    learnMore: 'Learn more',
+    start: 'Start',
+    stop: 'Stop',
+    clear: 'Clear',
+    inputs: 'Inputs',
+    source: 'Source',
+    microphone: 'Microphone',
+    sourceLocked: 'Source is locked while recording.',
+    sourceMic: 'Microphone',
+    sourceTab: 'Tab audio',
+    sourceMix: 'Mix (tab + mic)',
+    transcriptTitle: 'Transcript',
+    transcriptEmpty: 'No transcript yet. Start recording to begin.',
+    notesTitle: 'Notes',
+    refresh: 'Refresh',
+    searchTranscript: 'Search transcript',
+    searchPlaceholder: 'Filter by transcript text',
+    loadingSessions: 'Loading sessions...',
+    noSessions: 'No sessions found.',
+    noTranscriptYet: 'No transcript yet.',
+    selectSession: 'Select a session to view details.',
+    segments: 'Segments',
+    noSegments: 'No segments yet.',
+    exportTxt: 'Export TXT',
+    exportMd: 'Export MD',
+    appearance: 'Appearance',
+    appearanceLight: 'Light',
+    appearanceDark: 'Dark',
+    language: 'Language',
+    languageEnglish: 'English',
+    languageChinese: '中文',
+    providerSection: 'Provider',
+    providerStatus: 'Provider status',
+    manageApi: 'Manage API key',
+    privacy: 'Privacy',
+    privacySummary: 'How cloud transcription works',
+    privacyBody:
+      'When an API key is configured, recorded audio may be sent to a cloud transcription API for processing. Use local controls and provider settings to manage this behavior.',
+    account: 'Account',
+    signedInAs: 'Signed in as',
+    logout: 'Logout',
+    signInSubtitle: 'Sign in to open ReadMe transcription.',
+    email: 'Email',
+    password: 'Password',
+    login: 'Login',
+    loggingIn: 'Logging in...',
+    mockLogin: 'Mock Login',
+    systemDefaultMic: 'System default microphone',
+  },
+  zh: {
+    appTitle: 'ReadMe',
+    subtitle: '快速转录记录',
+    tabsTranscription: '转录',
+    tabsNotes: '笔记',
+    tabsSettings: '设置',
+    status: '状态',
+    warningOneLine: '警告：音频可能会发送到云端转录 API。',
+    learnMore: '了解更多',
+    start: '开始',
+    stop: '停止',
+    clear: '清空',
+    inputs: '输入',
+    source: '来源',
+    microphone: '麦克风',
+    sourceLocked: '录制中来源不可切换。',
+    sourceMic: '麦克风',
+    sourceTab: '标签页音频',
+    sourceMix: '混合（标签页 + 麦克风）',
+    transcriptTitle: '转录内容',
+    transcriptEmpty: '暂无转录内容。开始录制后会显示。',
+    notesTitle: '笔记',
+    refresh: '刷新',
+    searchTranscript: '搜索转录内容',
+    searchPlaceholder: '按转录文本筛选',
+    loadingSessions: '正在加载会话...',
+    noSessions: '未找到会话。',
+    noTranscriptYet: '暂无转录内容。',
+    selectSession: '请选择一个会话查看详情。',
+    segments: '分段',
+    noSegments: '暂无分段。',
+    exportTxt: '导出 TXT',
+    exportMd: '导出 MD',
+    appearance: '外观',
+    appearanceLight: '浅色',
+    appearanceDark: '深色',
+    language: '语言',
+    languageEnglish: 'English',
+    languageChinese: '中文',
+    providerSection: '服务提供商',
+    providerStatus: '服务状态',
+    manageApi: '管理 API Key',
+    privacy: '隐私',
+    privacySummary: '云端转录说明',
+    privacyBody: '配置 API Key 后，录制音频可能会发送到云端转录 API 进行处理。你可以通过本地设置和服务配置控制该行为。',
+    account: '账号',
+    signedInAs: '当前登录',
+    logout: '退出登录',
+    signInSubtitle: '登录后即可使用 ReadMe 转录。',
+    email: '邮箱',
+    password: '密码',
+    login: '登录',
+    loggingIn: '登录中...',
+    mockLogin: '模拟登录',
+    systemDefaultMic: '系统默认麦克风',
+  },
+} as const;
 
 function getStorageArea(): ChromeStorageArea | null {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) {
@@ -367,6 +487,62 @@ async function persistSelectedDeviceId(deviceId: string): Promise<void> {
   });
 }
 
+async function readUITheme(): Promise<UITheme> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    const localTheme = window.localStorage.getItem(UI_THEME_STORAGE_KEY);
+    return localTheme === 'dark' ? 'dark' : 'light';
+  }
+
+  return new Promise((resolve) => {
+    storage.get(UI_THEME_STORAGE_KEY, (items) => {
+      resolve(items[UI_THEME_STORAGE_KEY] === 'dark' ? 'dark' : 'light');
+    });
+  });
+}
+
+async function persistUITheme(theme: UITheme): Promise<void> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    window.localStorage.setItem(UI_THEME_STORAGE_KEY, theme);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    storage.set({ [UI_THEME_STORAGE_KEY]: theme }, () => resolve());
+  });
+}
+
+async function readUILang(): Promise<UILang> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    const localLang = window.localStorage.getItem(UI_LANG_STORAGE_KEY);
+    return localLang === 'zh' ? 'zh' : 'en';
+  }
+
+  return new Promise((resolve) => {
+    storage.get(UI_LANG_STORAGE_KEY, (items) => {
+      resolve(items[UI_LANG_STORAGE_KEY] === 'zh' ? 'zh' : 'en');
+    });
+  });
+}
+
+async function persistUILang(lang: UILang): Promise<void> {
+  const storage = getStorageArea();
+
+  if (!storage) {
+    window.localStorage.setItem(UI_LANG_STORAGE_KEY, lang);
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    storage.set({ [UI_LANG_STORAGE_KEY]: lang }, () => resolve());
+  });
+}
+
 
 async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: string; configurationLabel: string; error?: string }> {
   const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
@@ -418,7 +594,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>('transcription');
   const [status, setStatus] = useState<AudioStatus>('Idle');
-  const [statusHint, setStatusHint] = useState('Idle');
   const [devices, setDevices] = useState<DeviceOption[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
@@ -433,6 +608,10 @@ function App() {
   const exportToastTimerRef = useRef<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousAudioSourceLockedRef = useRef<boolean | null>(null);
+  const [uiTheme, setUITheme] = useState<UITheme>('light');
+  const [uiLang, setUILang] = useState<UILang>('en');
+
+  const t = (key: keyof (typeof UI_COPY)['en']) => UI_COPY[uiLang][key];
 
   const isRecordingActive = isRecordingActiveStatus(status);
   const isAudioSourceLocked = isRecordingActive;
@@ -472,13 +651,43 @@ function App() {
       }
     });
 
-    Promise.all([loadSettings(), getSttDiagnosticsFromRuntime()]).then(([settings, sttSummary]) => {
-      setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
-      if (sttSummary.error) {
-        setError(sttSummary.error);
+    Promise.all([loadSettings(), getSttDiagnosticsFromRuntime(), readUITheme(), readUILang()]).then(
+      ([settings, sttSummary, savedTheme, savedLang]) => {
+        setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
+        if (sttSummary.error) {
+          setError(sttSummary.error);
+        }
+        setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
+        setUITheme(savedTheme);
+        setUILang(savedLang);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) {
+      return;
+    }
+
+    const onStorageChange: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, areaName) => {
+      if (areaName !== 'local') {
+        return;
       }
-      setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
-    });
+
+      if (changes[UI_THEME_STORAGE_KEY]) {
+        setUITheme(changes[UI_THEME_STORAGE_KEY].newValue === 'dark' ? 'dark' : 'light');
+      }
+
+      if (changes[UI_LANG_STORAGE_KEY]) {
+        setUILang(changes[UI_LANG_STORAGE_KEY].newValue === 'zh' ? 'zh' : 'en');
+      }
+    };
+
+    chrome.storage.onChanged.addListener(onStorageChange);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(onStorageChange);
+    };
   }, []);
 
   const apiBaseUrl = useMemo(() => DEFAULT_API_BASE_URL, []);
@@ -523,11 +732,9 @@ function App() {
 
         const fallbackStatus = latestSession ? mapSessionStatusToAudioStatus(latestSession.status) : 'Idle';
         const nextStatus = snapshot?.status ?? fallbackStatus;
-        const nextHint = snapshot?.detail ?? (latestSession ? `Last session status: ${latestSession.status}` : nextStatus);
         const liveTranscript = snapshot?.transcript ?? '';
 
         setStatus(nextStatus);
-        setStatusHint(nextHint);
         setSelectedDeviceId(snapshot?.selectedDeviceId ?? persistedDeviceId);
         setSelectedSource(snapshot?.selectedSource ?? persistedAudioSource);
         setTranscriptText(liveTranscript || latestSession?.transcript || '');
@@ -538,7 +745,6 @@ function App() {
 
         const message = syncError instanceof Error ? syncError.message : String(syncError);
         setStatus('Error');
-        setStatusHint(message);
         setError(message);
       }
     };
@@ -546,7 +752,6 @@ function App() {
     const handleRuntimeMessage = (message: RuntimeEventMessage) => {
       if (message.type === 'STATUS_UPDATE') {
         setStatus(message.payload.status);
-        setStatusHint(message.payload.detail ?? message.payload.status);
         setSelectedDeviceId(message.payload.selectedDeviceId);
         setSelectedSource(message.payload.selectedSource);
 
@@ -597,7 +802,7 @@ function App() {
         const mediaDevices = await navigator.mediaDevices.enumerateDevices();
         const microphoneDevices = mediaDevices.filter((device) => device.kind === 'audioinput');
         const options: DeviceOption[] = [
-          { id: 'default', label: 'System default microphone' },
+          { id: 'default', label: UI_COPY.en.systemDefaultMic },
           ...microphoneDevices.map((device, index) => ({
             id: device.deviceId,
             label: device.label || `Microphone ${index + 1}`,
@@ -723,7 +928,6 @@ function App() {
     setPassword('');
     setError(null);
     setStatus('Idle');
-    setStatusHint('Idle');
     setActiveView('transcription');
     setTranscriptText('');
   };
@@ -770,7 +974,6 @@ function App() {
     } catch (startError) {
       const message = startError instanceof Error ? startError.message : 'Unable to start recording.';
       setStatus('Error');
-      setStatusHint(message);
       setError(message);
     }
   };
@@ -793,7 +996,6 @@ function App() {
     } catch (sourceError) {
       const message = sourceError instanceof Error ? sourceError.message : 'Unable to switch audio source.';
       setStatus('Error');
-      setStatusHint(message);
       setError(message);
     }
   };
@@ -807,7 +1009,6 @@ function App() {
     } catch (stopError) {
       const message = stopError instanceof Error ? stopError.message : 'Unable to stop recording.';
       setStatus('Error');
-      setStatusHint(message);
       setError(message);
     }
   };
@@ -825,7 +1026,6 @@ function App() {
     } catch (deviceError) {
       const message = deviceError instanceof Error ? deviceError.message : 'Unable to switch microphone.';
       setStatus('Error');
-      setStatusHint(message);
       setError(message);
     }
   };
@@ -839,6 +1039,21 @@ function App() {
     window.open(chrome.runtime.getURL('options.html'), '_blank');
   };
 
+
+  const handleThemeChange = async (theme: UITheme) => {
+    setUITheme(theme);
+    await persistUITheme(theme);
+  };
+
+  const handleLanguageChange = async (lang: UILang) => {
+    setUILang(lang);
+    await persistUILang(lang);
+  };
+
+  const handleLearnMoreClick = () => {
+    setActiveView('settings');
+  };
+
   const handleClearSessionData = async () => {
     setError(null);
 
@@ -846,7 +1061,6 @@ function App() {
       await clearSessions();
       setTranscriptText('');
       setStatus('Idle');
-      setStatusHint('Cleared local session data.');
       setNotesSessions([]);
       setSelectedSessionId(null);
     } catch (clearError) {
@@ -909,19 +1123,11 @@ function App() {
 
   if (auth) {
     return (
-      <main className="popup">
+      <main className="popup" data-theme={uiTheme}>
         <header className="popup__header">
           <div className="popup__brand">
-            <h1>ReadMe</h1>
-            <p className="subtitle subtitle--compact">Quick transcription capture</p>
-          </div>
-          <div className="popup__header-actions">
-            <button aria-label="Open settings" className="icon-button" onClick={handleOpenSettings} type="button">
-              ⚙
-            </button>
-            <button className="button button--tertiary" onClick={handleLogout} type="button">
-              Logout
-            </button>
+            <h1>{t('appTitle')}</h1>
+            <p className="subtitle subtitle--compact">{t('subtitle')}</p>
           </div>
         </header>
 
@@ -931,14 +1137,21 @@ function App() {
             onClick={() => setActiveView('transcription')}
             type="button"
           >
-            Transcription
+            {t('tabsTranscription')}
           </button>
           <button
             className={`segment-control__button ${activeView === 'notes' ? 'segment-control__button--active' : ''}`}
             onClick={() => setActiveView('notes')}
             type="button"
           >
-            Notes
+            {t('tabsNotes')}
+          </button>
+          <button
+            className={`segment-control__button ${activeView === 'settings' ? 'segment-control__button--active' : ''}`}
+            onClick={() => setActiveView('settings')}
+            type="button"
+          >
+            {t('tabsSettings')}
           </button>
         </section>
 
@@ -947,48 +1160,41 @@ function App() {
             <div className="info-row">
               <div className="info-row__status">
                 <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
-                <p className="info-row__status-text">Status: {status}</p>
+                <p className="info-row__status-text">{t('status')}: {status}</p>
               </div>
               <p className="info-row__meta">{sttStatusLine}</p>
             </div>
 
-            <details className="warning-inline">
-              <summary>
-                Warning: audio may be sent to a cloud transcription API.
-                <span className="warning-inline__action">Learn more</span>
-              </summary>
-              <p>When an API key is configured, recorded audio is sent to a cloud transcription API for processing.</p>
-            </details>
-
-            <p className="meta-line">Signed in as {auth.email}</p>
-            <p className="meta-line">
-              {statusHint}
-              <button className="link-button" onClick={handleOpenSettings} type="button">
-                Settings
-              </button>
-            </p>
+            <div className="warning-inline warning-inline--compact">
+              <p>
+                {t('warningOneLine')}
+                <button className="link-button" onClick={handleLearnMoreClick} type="button">
+                  {t('learnMore')}
+                </button>
+              </p>
+            </div>
 
             <section className="controls-row">
               {!isRecordingActive ? (
                 <button className="button button--primary" onClick={handleStartListening} type="button">
-                  Start
+                  {t('start')}
                 </button>
               ) : (
                 <button className="button button--primary" onClick={handleStopListening} type="button">
-                  Stop
+                  {t('stop')}
                 </button>
               )}
               <button className="button button--tertiary" onClick={handleClearSessionData} type="button">
-                Clear
+                {t('clear')}
               </button>
             </section>
 
             <section className="inputs-section">
-              <p className="section-label">Inputs</p>
+              <p className="section-label">{t('inputs')}</p>
               <div className="source-grid">
                 <div className="field-group">
                   <label className="form__label" htmlFor="audio-source">
-                    Source
+                    {t('source')}
                   </label>
                   <select
                     className="form__input"
@@ -999,16 +1205,16 @@ function App() {
                     }
                     value={selectedSource}
                   >
-                    <option value="mic">Microphone</option>
-                    <option value="tab">Tab audio</option>
-                    <option value="mix">Mix (tab + mic)</option>
+                    <option value="mic">{t('sourceMic')}</option>
+                    <option value="tab">{t('sourceTab')}</option>
+                    <option value="mix">{t('sourceMix')}</option>
                   </select>
-                  {isAudioSourceLocked ? <p className="field-hint">Source is locked while recording.</p> : null}
+                  {isAudioSourceLocked ? <p className="field-hint">{t('sourceLocked')}</p> : null}
                 </div>
 
                 <div className="field-group">
                   <label className="form__label" htmlFor="microphone-device">
-                    Microphone
+                    {t('microphone')}
                   </label>
                   <select
                     className="form__input"
@@ -1019,7 +1225,7 @@ function App() {
                   >
                     {devices.map((device) => (
                       <option key={device.id} value={device.id}>
-                        {device.label}
+                        {device.id === 'default' ? t('systemDefaultMic') : device.label}
                       </option>
                     ))}
                   </select>
@@ -1031,43 +1237,45 @@ function App() {
 
             <section className="transcript-panel">
               <div className="transcript-panel__header">
-                <h2>Transcript</h2>
+                <h2>{t('transcriptTitle')}</h2>
               </div>
               <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-                {!transcriptText ? <p className="transcript__line transcript__line--muted">No transcript yet. Start recording to begin.</p> : null}
+                {!transcriptText ? <p className="transcript__line transcript__line--muted">{t('transcriptEmpty')}</p> : null}
                 {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
               </div>
             </section>
           </section>
-        ) : (
+        ) : null}
+
+        {activeView === 'notes' ? (
           <section className="notes-view">
             <div className="notes__toolbar">
-              <h2>Notes</h2>
+              <h2>{t('notesTitle')}</h2>
               <button className="button button--tertiary" onClick={loadNotesSessions} type="button">
-                Refresh
+                {t('refresh')}
               </button>
             </div>
 
             <label className="form__label" htmlFor="notes-search">
-              Search transcript
+              {t('searchTranscript')}
             </label>
             <input
               className="form__input"
               id="notes-search"
               onChange={(event) => setNotesSearch(event.target.value)}
-              placeholder="Filter by transcript text"
+              placeholder={t('searchPlaceholder')}
               type="search"
               value={notesSearch}
             />
 
             {notesError ? <p className="error">{notesError}</p> : null}
-            {notesLoading ? <p className="panel__body">Loading sessions...</p> : null}
+            {notesLoading ? <p className="panel__body">{t('loadingSessions')}</p> : null}
 
             <div className="notes-layout">
               <div className="notes-list" role="list">
-                {!filteredSessions.length ? <p className="panel__body">No sessions found.</p> : null}
+                {!filteredSessions.length ? <p className="panel__body">{t('noSessions')}</p> : null}
                 {filteredSessions.map((session) => {
-                  const preview = session.transcript.trim() ? session.transcript.slice(0, 60) : '(no transcript yet)';
+                  const preview = session.transcript.trim() ? session.transcript.slice(0, 60) : t('noTranscriptYet');
                   const duration = formatDuration(session.startedAt, session.endedAt);
 
                   return (
@@ -1094,17 +1302,17 @@ function App() {
 
               <div className="notes-detail">
                 {!selectedSession ? (
-                  <p className="panel__body">Select a session to view details.</p>
+                  <p className="panel__body">{t('selectSession')}</p>
                 ) : (
                   <>
                     <div className="notes__toolbar">
-                      <h3>Transcript</h3>
+                      <h3>{t('transcriptTitle')}</h3>
                       <div className="notes-detail__actions">
                         <button className="button button--secondary" onClick={() => handleExportSession('txt')} type="button">
-                          Export TXT
+                          {t('exportTxt')}
                         </button>
                         <button className="button button--secondary" onClick={() => handleExportSession('md')} type="button">
-                          Export MD
+                          {t('exportMd')}
                         </button>
                       </div>
                     </div>
@@ -1112,13 +1320,13 @@ function App() {
                       {selectedSession.transcript ? (
                         <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
                       ) : (
-                        <p className="transcript__line transcript__line--muted">No transcript yet.</p>
+                        <p className="transcript__line transcript__line--muted">{t('noTranscriptYet')}</p>
                       )}
                     </div>
 
-                    <h3>Segments</h3>
+                    <h3>{t('segments')}</h3>
                     {selectedSession.segments.length === 0 ? (
-                      <p className="panel__body">No segments yet.</p>
+                      <p className="panel__body">{t('noSegments')}</p>
                     ) : (
                       <ul className="notes-segments">
                         {selectedSession.segments.map((segment) => (
@@ -1136,7 +1344,74 @@ function App() {
               </div>
             </div>
           </section>
-        )}
+        ) : null}
+
+        {activeView === 'settings' ? (
+          <section className="settings-view">
+            <div className="settings-card">
+              <h2>{t('appearance')}</h2>
+              <div className="settings-toggle-row">
+                <p className="panel__body">{t('appearance')}</p>
+                <div className="inline-actions">
+                  <button
+                    className={`button button--secondary ${uiTheme === 'light' ? 'button--selected' : ''}`}
+                    onClick={() => void handleThemeChange('light')}
+                    type="button"
+                  >
+                    {t('appearanceLight')}
+                  </button>
+                  <button
+                    className={`button button--secondary ${uiTheme === 'dark' ? 'button--selected' : ''}`}
+                    onClick={() => void handleThemeChange('dark')}
+                    type="button"
+                  >
+                    {t('appearanceDark')}
+                  </button>
+                </div>
+              </div>
+              <div className="settings-toggle-row">
+                <p className="panel__body">{t('language')}</p>
+                <div className="inline-actions">
+                  <button
+                    className={`button button--secondary ${uiLang === 'en' ? 'button--selected' : ''}`}
+                    onClick={() => void handleLanguageChange('en')}
+                    type="button"
+                  >
+                    {t('languageEnglish')}
+                  </button>
+                  <button
+                    className={`button button--secondary ${uiLang === 'zh' ? 'button--selected' : ''}`}
+                    onClick={() => void handleLanguageChange('zh')}
+                    type="button"
+                  >
+                    {t('languageChinese')}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-card">
+              <h2>{t('providerSection')}</h2>
+              <p className="panel__body">{t('providerStatus')}: {sttStatusLine}</p>
+              <button className="button button--tertiary settings-link" onClick={() => void handleOpenSettings()} type="button">
+                {t('manageApi')}
+              </button>
+            </div>
+
+            <details className="settings-card">
+              <summary>{t('privacySummary')}</summary>
+              <p className="panel__body">{t('privacyBody')}</p>
+            </details>
+
+            <div className="settings-card">
+              <h2>{t('account')}</h2>
+              <p className="panel__body">{t('signedInAs')}: {auth.email}</p>
+              <button className="button button--tertiary settings-link" onClick={() => void handleLogout()} type="button">
+                {t('logout')}
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         {exportToast ? <p className="toast">{exportToast}</p> : null}
       </main>
@@ -1144,13 +1419,13 @@ function App() {
   }
 
   return (
-    <main className="popup">
-      <h1>ReadMe</h1>
-      <p className="subtitle">Sign in to open ReadMe transcription.</p>
+    <main className="popup" data-theme={uiTheme}>
+      <h1>{t('appTitle')}</h1>
+      <p className="subtitle">{t('signInSubtitle')}</p>
 
       <form className="form" onSubmit={handleLogin}>
         <label className="form__label" htmlFor="email">
-          Email
+          {t('email')}
         </label>
         <input
           autoComplete="email"
@@ -1163,7 +1438,7 @@ function App() {
         />
 
         <label className="form__label" htmlFor="password">
-          Password
+          {t('password')}
         </label>
         <input
           autoComplete="current-password"
@@ -1178,11 +1453,11 @@ function App() {
         {error && <p className="error">{error}</p>}
 
         <button className="button" disabled={isSubmitting} type="submit">
-          {isSubmitting ? 'Logging in...' : 'Login'}
+          {isSubmitting ? t('loggingIn') : t('login')}
         </button>
 
         <button className="button button--secondary" disabled={isSubmitting} onClick={handleMockLogin} type="button">
-          Mock Login
+          {t('mockLogin')}
         </button>
       </form>
     </main>
