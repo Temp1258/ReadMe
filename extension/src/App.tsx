@@ -296,6 +296,7 @@ const UI_COPY = {
     noSegments: 'No segments yet.',
     exportTxt: 'Export TXT',
     exportMd: 'Export MD',
+    export: 'Export',
     appearance: 'Appearance',
     appearanceLight: 'Light',
     appearanceDark: 'Dark',
@@ -355,6 +356,7 @@ const UI_COPY = {
     noSegments: '暂无分段。',
     exportTxt: '导出 TXT',
     exportMd: '导出 MD',
+    export: '导出',
     appearance: '外观',
     appearanceLight: '浅色',
     appearanceDark: '深色',
@@ -1261,7 +1263,6 @@ function App() {
                 </button>
               </div>
             </div>
-            <p className="meta-line">{t('clearDataHint')}</p>
 
             <label className="form__label" htmlFor="notes-search">
               {t('searchTranscript')}
@@ -1315,13 +1316,16 @@ function App() {
                   <>
                     <div className="notes-detail__header">
                       <h3>{t('transcriptTitle')}</h3>
-                      <div className="notes-detail__actions">
-                        <button className="button button--secondary" onClick={() => handleExportSession('txt')} type="button">
-                          {t('exportTxt')}
-                        </button>
-                        <button className="button button--secondary" onClick={() => handleExportSession('md')} type="button">
-                          {t('exportMd')}
-                        </button>
+                      <div className="notes-detail__export-group" aria-label={t('export')}>
+                        <span className="notes-detail__export-label">{t('export')}</span>
+                        <div className="notes-detail__actions">
+                          <button className="button button--tertiary button--compact" onClick={() => handleExportSession('txt')} type="button">
+                            {t('exportTxt')}
+                          </button>
+                          <button className="button button--tertiary button--compact" onClick={() => handleExportSession('md')} type="button">
+                            {t('exportMd')}
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="transcript">
