@@ -1,6 +1,7 @@
 export type DefaultSource = 'microphone' | 'tab';
 export type SttProvider = 'mock' | 'openai';
 export type StorageAreaName = 'local' | 'sync' | 'localStorage' | 'none';
+export type StorageBackendName = 'chrome.storage.local' | 'chrome.storage.sync' | 'localStorage';
 export type SttDetectedFrom =
   | 'settings.stt.apiKey'
   | 'sttApiKey'
@@ -19,6 +20,7 @@ export type SttSettings = {
 export type SttSettingsLoadResult = SttSettings & {
   detectedFrom: SttDetectedFrom;
   storageArea: StorageAreaName;
+  backend: StorageBackendName;
 };
 
 export type ExtensionSettings = {
@@ -73,6 +75,26 @@ function getStorageAreas(): { local: chrome.storage.StorageArea; sync?: chrome.s
     local: chrome.storage.local,
     sync: chrome.storage.sync,
   };
+}
+
+export function isExtensionContext(): boolean {
+  try {
+    return typeof location !== 'undefined' && location.protocol === 'chrome-extension:';
+  } catch {
+    return false;
+  }
+}
+
+export function getBackend(): StorageBackendName {
+  if (isExtensionContext()) {
+    if (!globalThis.chrome?.storage?.local) {
+      throw new Error('chrome.storage.local unavailable in extension context');
+    }
+
+    return 'chrome.storage.local';
+  }
+
+  return 'localStorage';
 }
 
 async function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promise<Record<string, unknown>> {
@@ -155,102 +177,125 @@ async function persistCanonicalSettings(storage: chrome.storage.StorageArea, set
 }
 
 export async function loadSettings(): Promise<ExtensionSettings> {
-  const areas = getStorageAreas();
+  const backend = getBackend();
 
-  if (!areas) {
-    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) {
-      return { ...defaults, stt: { ...defaults.stt } };
+  if (backend === 'chrome.storage.local') {
+    const areas = getStorageAreas();
+
+    if (!areas) {
+      throw new Error('chrome.storage.local unavailable in extension context');
     }
 
-    try {
-      const normalized = normalizeSettings(JSON.parse(raw) as LegacySettings);
-      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
-      return normalized;
-    } catch {
-      return { ...defaults, stt: { ...defaults.stt } };
+    const items = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const lookup = parseStorageLookup(items);
+    const normalized = normalizeSettings(lookup.settings);
+
+    if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
+      await persistCanonicalSettings(areas.local, normalized);
     }
+
+    return normalized;
   }
 
-  const items = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-  const lookup = parseStorageLookup(items);
-  const normalized = normalizeSettings(lookup.settings);
-
-  if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
-    await persistCanonicalSettings(areas.local, normalized);
+  const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (!raw) {
+    return { ...defaults, stt: { ...defaults.stt } };
   }
 
-  return normalized;
+  try {
+    const normalized = normalizeSettings(JSON.parse(raw) as LegacySettings);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+  } catch {
+    return { ...defaults, stt: { ...defaults.stt } };
+  }
 }
 
 export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   const normalized = normalizeSettings(settings);
-  const areas = getStorageAreas();
+  const backend = getBackend();
 
-  if (!areas) {
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+  if (backend === 'chrome.storage.local') {
+    const areas = getStorageAreas();
+
+    if (!areas) {
+      throw new Error('chrome.storage.local unavailable in extension context');
+    }
+
+    await persistCanonicalSettings(areas.local, normalized);
     return;
   }
 
-  await persistCanonicalSettings(areas.local, normalized);
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
 }
 
 export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
-  const areas = getStorageAreas();
+  const backend = getBackend();
 
-  if (!areas) {
-    const settings = await loadSettings();
-    return {
-      ...settings.stt,
-      detectedFrom: settings.stt.apiKey ? 'settings.stt.apiKey' : 'none',
-      storageArea: 'localStorage',
-    };
-  }
+  if (backend === 'chrome.storage.local') {
+    const areas = getStorageAreas();
 
-  const localItems = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-  const localLookup = parseStorageLookup(localItems);
-
-  if (localLookup.hasAnySttData) {
-    const normalized = normalizeSettings(localLookup.settings);
-    if (localLookup.detectedFrom !== 'settings.stt.apiKey') {
-      await persistCanonicalSettings(areas.local, {
-        ...(await loadSettings()),
-        stt: normalized.stt,
-      });
+    if (!areas) {
+      throw new Error('chrome.storage.local unavailable in extension context');
     }
 
-    return {
-      ...normalized.stt,
-      detectedFrom: localLookup.detectedFrom,
-      storageArea: 'local',
-    };
-  }
+    const localItems = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const localLookup = parseStorageLookup(localItems);
 
-  if (areas.sync) {
-    const syncItems = await storageGet(areas.sync, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-    const syncLookup = parseStorageLookup(syncItems);
-
-    if (syncLookup.hasAnySttData) {
-      const normalizedSync = normalizeSettings(syncLookup.settings);
-      const localSettings = await loadSettings();
-      await persistCanonicalSettings(areas.local, {
-        ...localSettings,
-        stt: normalizedSync.stt,
-      });
-      await storageRemove(areas.sync, [...LEGACY_STT_KEYS]);
+    if (localLookup.hasAnySttData) {
+      const normalized = normalizeSettings(localLookup.settings);
+      if (localLookup.detectedFrom !== 'settings.stt.apiKey') {
+        await persistCanonicalSettings(areas.local, {
+          ...(await loadSettings()),
+          stt: normalized.stt,
+        });
+      }
 
       return {
-        ...normalizedSync.stt,
-        detectedFrom: syncLookup.detectedFrom,
-        storageArea: 'sync',
+        ...normalized.stt,
+        detectedFrom: localLookup.detectedFrom,
+        storageArea: 'local',
+        backend: 'chrome.storage.local',
       };
     }
+
+    if (areas.sync) {
+      const syncItems = await storageGet(areas.sync, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+      const syncLookup = parseStorageLookup(syncItems);
+
+      if (syncLookup.hasAnySttData) {
+        const normalizedSync = normalizeSettings(syncLookup.settings);
+        const localSettings = await loadSettings();
+        await persistCanonicalSettings(areas.local, {
+          ...localSettings,
+          stt: normalizedSync.stt,
+        });
+        await storageRemove(areas.sync, [...LEGACY_STT_KEYS]);
+
+        return {
+          ...normalizedSync.stt,
+          detectedFrom: syncLookup.detectedFrom,
+          storageArea: 'sync',
+          backend: 'chrome.storage.sync',
+        };
+      }
+    }
+
+    return {
+      provider: 'mock',
+      detectedFrom: 'none',
+      storageArea: 'none',
+      backend: 'chrome.storage.local',
+    };
   }
 
+  const settings = await loadSettings();
+
   return {
-    provider: 'mock',
-    detectedFrom: 'none',
-    storageArea: 'none',
+    ...settings.stt,
+    detectedFrom: settings.stt.apiKey ? 'settings.stt.apiKey' : 'none',
+    storageArea: 'localStorage',
+    backend: 'localStorage',
   };
 }
 

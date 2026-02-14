@@ -1,5 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { loadSttSettings } from './settings';
+import { isExtensionContext, loadSttSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -42,6 +42,29 @@ const state = {
   activeSessionId: null as string | null,
   useMockTranscription: false,
 };
+
+async function refreshSttRuntimeSettings(): Promise<void> {
+  const sttSettings = await loadSttSettings();
+  const apiKey = sttSettings.apiKey?.trim() ?? '';
+  const keyPresent = sttSettings.provider === 'openai' && Boolean(apiKey);
+  const provider = keyPresent ? 'openai' : 'mock';
+  const extensionContext = isExtensionContext();
+
+  inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
+  state.useMockTranscription = provider === 'mock';
+
+  console.info(
+    `STT: backend=${sttSettings.backend} provider=${provider} keyPresent=${keyPresent} detectedFrom=${sttSettings.detectedFrom}`,
+  );
+
+  if (extensionContext && sttSettings.backend !== 'chrome.storage.local') {
+    console.error(
+      `STT: invalid backend in extension context backend=${sttSettings.backend} expected=chrome.storage.local detectedFrom=${sttSettings.detectedFrom}`,
+    );
+  }
+
+  console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
+}
 
 function toPersistedStatus(status: AudioStatus): PersistedStatus {
   if (status === 'Listening') {
@@ -344,16 +367,7 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
-  const sttSettings = await loadSttSettings();
-  const apiKey = sttSettings.apiKey?.trim() ?? '';
-  const keyPresent = sttSettings.provider === 'openai' && Boolean(apiKey);
-  const provider = keyPresent ? 'openai' : 'mock';
-  inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
-  state.useMockTranscription = provider === 'mock';
-  console.info(
-    `STT: settings loaded provider=${provider} keyPresent=${keyPresent} detectedFrom=${sttSettings.detectedFrom} storageArea=${sttSettings.storageArea}`,
-  );
-  console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
+  await refreshSttRuntimeSettings();
 
   const sessionId = crypto.randomUUID();
   state.activeSessionId = sessionId;
@@ -394,6 +408,16 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   state.recorder = recorder;
   const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
   updateStatus('Listening', `Listening on ${sourceDetail}`);
+}
+
+
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener(() => {
+    void refreshSttRuntimeSettings().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`STT: failed to refresh settings from storage change: ${message}`);
+    });
+  });
 }
 
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {
