@@ -50,6 +50,10 @@ function parseAudioSourceInput(source: string): AudioSource {
   return source === 'tab' || source === 'mix' ? source : 'mic';
 }
 
+function isRecordingActiveStatus(status: AudioStatus): boolean {
+  return status !== 'Idle' && status !== 'Stopped' && status !== 'Error';
+}
+
 function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
   if (status === 'listening') {
     return 'Listening';
@@ -428,6 +432,11 @@ function App() {
   const [exportToast, setExportToast] = useState<string | null>(null);
   const exportToastTimerRef = useRef<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const previousAudioSourceLockedRef = useRef<boolean | null>(null);
+
+  const isRecordingActive = isRecordingActiveStatus(status);
+  const isAudioSourceLocked = isRecordingActive;
+  const isMicrophoneLocked = selectedSource === 'tab' || isRecordingActive;
 
   const loadNotesSessions = async () => {
     setNotesLoading(true);
@@ -481,6 +490,15 @@ function App() {
 
     transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
   }, [transcriptText]);
+
+  useEffect(() => {
+    if (previousAudioSourceLockedRef.current === isAudioSourceLocked) {
+      return;
+    }
+
+    previousAudioSourceLockedRef.current = isAudioSourceLocked;
+    console.info(`Audio source selector ${isAudioSourceLocked ? 'locked' : 'unlocked'}.`);
+  }, [isAudioSourceLocked]);
 
   useEffect(() => {
     if (!auth || typeof chrome === 'undefined') {
@@ -758,6 +776,11 @@ function App() {
   };
 
   const handleSourceChange = async (source: AudioSource) => {
+    if (isRecordingActive) {
+      console.info('Ignoring audio source change while recording is active.');
+      return;
+    }
+
     setError(null);
 
     try {
@@ -935,6 +958,7 @@ function App() {
                 </label>
                 <select
                   className="form__input"
+                  disabled={isAudioSourceLocked}
                   id="audio-source"
                   onChange={(event) =>
                     handleSourceChange(parseAudioSourceInput(event.target.value))
@@ -946,6 +970,7 @@ function App() {
                   <option value="mix">Mix (tab + mic)</option>
                 </select>
                 <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
+                {isAudioSourceLocked ? <p className="status-row__hint">Audio source is locked while recording. Stop to change.</p> : null}
               </div>
 
               <div className="field-group">
@@ -954,7 +979,7 @@ function App() {
                 </label>
                 <select
                   className="form__input"
-                  disabled={selectedSource === 'tab'}
+                  disabled={isMicrophoneLocked}
                   id="microphone-device"
                   onChange={(event) => handleDeviceChange(event.target.value)}
                   value={selectedDeviceId}
