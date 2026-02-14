@@ -273,6 +273,8 @@ const UI_COPY = {
     start: 'Start',
     stop: 'Stop',
     clear: 'Clear',
+    clearData: 'Clear data',
+    clearDataHint: 'Removes local transcripts and notes.',
     inputs: 'Inputs',
     source: 'Source',
     microphone: 'Microphone',
@@ -330,6 +332,8 @@ const UI_COPY = {
     start: '开始',
     stop: '停止',
     clear: '清空',
+    clearData: '清空数据',
+    clearDataHint: '删除本地转录和笔记。',
     inputs: '输入',
     source: '来源',
     microphone: '麦克风',
@@ -1184,9 +1188,6 @@ function App() {
                   {t('stop')}
                 </button>
               )}
-              <button className="button button--tertiary" onClick={handleClearSessionData} type="button">
-                {t('clear')}
-              </button>
             </section>
 
             <section className="inputs-section">
@@ -1251,10 +1252,16 @@ function App() {
           <section className="notes-view">
             <div className="notes__toolbar">
               <h2>{t('notesTitle')}</h2>
-              <button className="button button--tertiary" onClick={loadNotesSessions} type="button">
-                {t('refresh')}
-              </button>
+              <div className="notes__toolbar-actions">
+                <button className="button button--tertiary" onClick={loadNotesSessions} type="button">
+                  {t('refresh')}
+                </button>
+                <button className="button button--tertiary button--danger" onClick={handleClearSessionData} type="button">
+                  {t('clearData')}
+                </button>
+              </div>
             </div>
+            <p className="meta-line">{t('clearDataHint')}</p>
 
             <label className="form__label" htmlFor="notes-search">
               {t('searchTranscript')}
@@ -1274,8 +1281,7 @@ function App() {
             <div className="notes-layout">
               <div className="notes-list" role="list">
                 {!filteredSessions.length ? <p className="panel__body">{t('noSessions')}</p> : null}
-                {filteredSessions.map((session) => {
-                  const preview = session.transcript.trim() ? session.transcript.slice(0, 60) : t('noTranscriptYet');
+                {filteredSessions.map((session, index) => {
                   const duration = formatDuration(session.startedAt, session.endedAt);
 
                   return (
@@ -1291,10 +1297,12 @@ function App() {
                         <span className={`status-indicator status-indicator--${session.status}`}>{session.status}</span>
                       </div>
                       <p className="notes-list__meta">
+                        Transcript #{index + 1}
+                      </p>
+                      <p className="notes-list__meta">
                         {session.source}
                         {duration ? ` • ${duration}` : ''}
                       </p>
-                      <p className="notes-list__preview">{preview}</p>
                     </button>
                   );
                 })}
@@ -1305,7 +1313,7 @@ function App() {
                   <p className="panel__body">{t('selectSession')}</p>
                 ) : (
                   <>
-                    <div className="notes__toolbar">
+                    <div className="notes-detail__header">
                       <h3>{t('transcriptTitle')}</h3>
                       <div className="notes-detail__actions">
                         <button className="button button--secondary" onClick={() => handleExportSession('txt')} type="button">
