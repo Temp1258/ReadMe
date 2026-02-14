@@ -10,7 +10,7 @@ type AuthState = {
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type AppView = 'transcription' | 'notes';
-type AudioSource = 'mic' | 'tab';
+type AudioSource = 'mic' | 'tab' | 'mix';
 
 type DeviceOption = {
   id: string;
@@ -43,7 +43,11 @@ type GetSttSettingsResponse =
     };
 
 function settingsSourceToAudioSource(source?: string): AudioSource {
-  return source === 'tab' ? 'tab' : 'mic';
+  return source === 'tab' || source === 'mix' ? source : 'mic';
+}
+
+function parseAudioSourceInput(source: string): AudioSource {
+  return source === 'tab' || source === 'mix' ? source : 'mic';
 }
 
 function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
@@ -323,7 +327,7 @@ async function readSelectedAudioSource(): Promise<AudioSource> {
   return new Promise((resolve) => {
     storage.get(AUDIO_SOURCE_STORAGE_KEY, (items) => {
       const stored = items[AUDIO_SOURCE_STORAGE_KEY];
-      if (stored === 'tab' || stored === 'mic') {
+      if (stored === 'tab' || stored === 'mic' || stored === 'mix') {
         resolve(stored);
         return;
       }
@@ -711,7 +715,7 @@ function App() {
 
     try {
       let streamId: string | undefined;
-      if (selectedSource === 'tab') {
+      if (selectedSource === 'tab' || selectedSource === 'mix') {
         streamId = await new Promise<string>((resolve, reject) => {
           if (!chrome.tabCapture?.getMediaStreamId) {
             reject(new Error('Tab audio capture is not available in this browser.'));
@@ -793,14 +797,7 @@ function App() {
       await persistSelectedDeviceId(deviceId);
 
       if (status === 'Listening' || status === 'Transcribing') {
-        await ensureOffscreenDocument();
-        await sendControlMessage({
-          type: 'START_RECORDING',
-          payload: {
-            deviceId,
-            source: selectedSource,
-          },
-        });
+        await handleStartListening();
       }
     } catch (deviceError) {
       const message = deviceError instanceof Error ? deviceError.message : 'Unable to switch microphone.';
@@ -939,12 +936,16 @@ function App() {
                 <select
                   className="form__input"
                   id="audio-source"
-                  onChange={(event) => handleSourceChange(event.target.value === 'tab' ? 'tab' : 'mic')}
+                  onChange={(event) =>
+                    handleSourceChange(parseAudioSourceInput(event.target.value))
+                  }
                   value={selectedSource}
                 >
                   <option value="mic">Microphone</option>
                   <option value="tab">Tab audio</option>
+                  <option value="mix">Mix (tab + mic)</option>
                 </select>
+                <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
               </div>
 
               <div className="field-group">
@@ -953,7 +954,7 @@ function App() {
                 </label>
                 <select
                   className="form__input"
-                  disabled={selectedSource !== 'mic'}
+                  disabled={selectedSource === 'tab'}
                   id="microphone-device"
                   onChange={(event) => handleDeviceChange(event.target.value)}
                   value={selectedDeviceId}

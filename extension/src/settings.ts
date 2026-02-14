@@ -1,4 +1,4 @@
-export type DefaultSource = 'microphone' | 'tab';
+export type DefaultSource = 'microphone' | 'tab' | 'mix';
 export type SttProvider = 'mock' | 'openai';
 export type StorageAreaName = 'local' | 'sync' | 'localStorage' | 'none';
 export type StorageBackendName = 'chrome.storage.local' | 'chrome.storage.sync' | 'localStorage';
@@ -142,7 +142,8 @@ function normalizeSettings(settings: LegacySettings): ExtensionSettings {
   const provider: SttProvider = apiKey ? 'openai' : configuredProvider === 'openai' || configuredProvider === 'mock' ? configuredProvider : 'mock';
 
   return {
-    defaultSource: settings.defaultSource === 'tab' ? 'tab' : defaults.defaultSource,
+    defaultSource:
+      settings.defaultSource === 'tab' || settings.defaultSource === 'mix' ? settings.defaultSource : defaults.defaultSource,
     stt: {
       provider,
       ...(provider === 'openai' && apiKey ? { apiKey } : {}),

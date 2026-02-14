@@ -13,6 +13,10 @@ import {
 } from './settings';
 import './styles.css';
 
+function parseDefaultSourceInput(source: string): DefaultSource {
+  return source === 'tab' || source === 'mix' ? source : 'microphone';
+}
+
 function OptionsPage() {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [storedApiKey, setStoredApiKey] = useState('');
@@ -127,12 +131,16 @@ function OptionsPage() {
           <select
             className="form__input"
             id="default-source"
-            onChange={(event) => setDefaultSource(event.target.value === 'tab' ? 'tab' : 'microphone')}
+            onChange={(event) =>
+              setDefaultSource(parseDefaultSourceInput(event.target.value))
+            }
             value={defaultSource}
           >
             <option value="microphone">Microphone</option>
             <option value="tab">Tab audio</option>
+            <option value="mix">Mix (tab + mic)</option>
           </select>
+          <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
 
           <button className="button" disabled={isSaving} type="submit">
             {isSaving ? 'Saving...' : 'Save'}
