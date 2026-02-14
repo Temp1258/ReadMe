@@ -346,11 +346,13 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   const stream = await getAudioStream(state.selectedSource, streamId);
   const sttSettings = await loadSttSettings();
   const apiKey = sttSettings.apiKey?.trim() ?? '';
-  const keyPresent = Boolean(apiKey);
-  const provider = sttSettings.provider;
+  const keyPresent = sttSettings.provider === 'openai' && Boolean(apiKey);
+  const provider = keyPresent ? 'openai' : 'mock';
   inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
-  state.useMockTranscription = provider === 'mock' || !keyPresent;
-  console.info(`STT: settings loaded provider=${provider} keyPresent=${keyPresent} storageArea=chrome.storage.local`);
+  state.useMockTranscription = provider === 'mock';
+  console.info(
+    `STT: settings loaded provider=${provider} keyPresent=${keyPresent} detectedFrom=${sttSettings.detectedFrom} storageArea=${sttSettings.storageArea}`,
+  );
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();
