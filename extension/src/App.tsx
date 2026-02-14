@@ -120,7 +120,7 @@ function formatExportDuration(startedAt: number, endedAt?: number): string {
 function getExportFileName(session: SessionRecord, extension: string): string {
   const safeSource = session.source.replace(/[^a-z0-9_-]/gi, '_');
   const timestamp = formatFileTimestamp(session.startedAt);
-  return `ticnote_${safeSource}_${timestamp}.${extension}`;
+  return `readme_${safeSource}_${timestamp}.${extension}`;
 }
 
 function buildSessionMetadataLines(session: SessionRecord): string[] {
@@ -154,7 +154,7 @@ function buildMarkdownExport(session: SessionRecord): string {
       : session.segments.map((segment) => `- idx: ${segment.idx}, ts: ${segment.ts}, text: ${segment.text}`).join('\n');
 
   return [
-    '# TicNote Session Export',
+    '# ReadMe Session Export',
     '',
     '## Metadata',
     metadataLines,
@@ -911,7 +911,7 @@ function App() {
     return (
       <main className="popup">
         <header className="popup__header">
-          <h1>TicNote</h1>
+          <h1>ReadMe</h1>
           <button className="button button--ghost" onClick={handleLogout} type="button">
             Logout
           </button>
@@ -1119,7 +1119,7 @@ function App() {
   return (
     <main className="popup">
       <h1>ReadMe</h1>
-      <p className="subtitle">Sign in to open TicNote transcription.</p>
+      <p className="subtitle">Sign in to open ReadMe transcription.</p>
 
       <form className="form" onSubmit={handleLogin}>
         <label className="form__label" htmlFor="email">
