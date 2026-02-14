@@ -3,6 +3,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import {
   defaults,
+  getSttCredentialSummary,
   loadSettings,
   loadSttSettings,
   maskSecret,
@@ -19,11 +20,18 @@ function OptionsPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [sttDiagnostics, setSttDiagnostics] = useState<Awaited<ReturnType<typeof getSttCredentialSummary>> | null>(null);
+
+  const refreshSttDiagnostics = async () => {
+    const summary = await getSttCredentialSummary();
+    setSttDiagnostics(summary);
+  };
 
   useEffect(() => {
-    Promise.all([loadSettings(), loadSttSettings()]).then(([settings, stt]) => {
+    Promise.all([loadSettings(), loadSttSettings(), getSttCredentialSummary()]).then(([settings, stt, summary]) => {
       setStoredApiKey(stt.apiKey?.trim() ?? '');
       setDefaultSource(settings.defaultSource ?? defaults.defaultSource);
+      setSttDiagnostics(summary);
     });
   }, []);
 
@@ -43,22 +51,21 @@ function OptionsPage() {
 
     try {
       const currentSettings = await loadSettings();
-      const currentStt = await loadSttSettings();
-      const nextStt =
-        trimmedKey.length > 0
-          ? { provider: 'openai' as const, apiKey: trimmedKey }
-          : {
-              provider: currentStt.provider,
-              ...(currentStt.apiKey ? { apiKey: currentStt.apiKey } : {}),
-            };
+      await saveSttSettings({ apiKey: trimmedKey });
+
+      const updatedStt = await loadSttSettings();
 
       await saveSettings({
         ...currentSettings,
         defaultSource,
-        stt: nextStt,
+        stt: {
+          provider: updatedStt.provider,
+          ...(updatedStt.apiKey ? { apiKey: updatedStt.apiKey } : {}),
+        },
       });
-      setStoredApiKey(nextStt.apiKey ?? '');
+      setStoredApiKey(updatedStt.apiKey ?? '');
       setApiKeyInput('');
+      await refreshSttDiagnostics();
       setStatusMessage('Settings saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to save settings.');
@@ -78,6 +85,7 @@ function OptionsPage() {
       await saveSettings({ ...currentSettings, defaultSource });
       setStoredApiKey('');
       setApiKeyInput('');
+      await refreshSttDiagnostics();
       setStatusMessage('API key cleared.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to clear API key.');
@@ -136,6 +144,15 @@ function OptionsPage() {
           {statusMessage ? <p className="success">{statusMessage}</p> : null}
           {error ? <p className="error">{error}</p> : null}
         </form>
+
+        <div className="panel" style={{ marginTop: '1rem' }}>
+          <h2 style={{ marginTop: 0 }}>STT diagnostics (safe)</h2>
+          <p>Provider: {sttDiagnostics?.provider ?? 'unknown'}</p>
+          <p>Configured: {sttDiagnostics?.configured ? 'true' : 'false'}</p>
+          <p>Last4: {sttDiagnostics?.last4 ?? 'n/a'}</p>
+          <p>Storage area: {sttDiagnostics?.storageArea ?? 'unknown'}</p>
+          <p>Detected from: {sttDiagnostics?.detectedFrom ?? 'unknown'}</p>
+        </div>
       </section>
     </main>
   );

@@ -436,7 +436,7 @@ function App() {
     });
 
     Promise.all([loadSettings(), getSttCredentialSummary()]).then(([settings, sttSummary]) => {
-      const label = sttSummary.keyPresent ? `Configured (${sttSummary.maskedApiKey})` : 'Not configured';
+      const label = sttSummary.configured ? `Configured (****${sttSummary.last4 ?? ''})` : 'Not configured';
       setSttConfiguredLabel(label);
       setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
     });
