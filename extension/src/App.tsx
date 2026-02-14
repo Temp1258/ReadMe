@@ -162,23 +162,6 @@ function buildMarkdownExport(session: SessionRecord): string {
   ].join('\n');
 }
 
-function buildJsonExport(session: SessionRecord): string {
-  return JSON.stringify(
-    {
-      id: session.id,
-      source: session.source,
-      status: session.status,
-      startedAt: session.startedAt,
-      endedAt: session.endedAt ?? null,
-      duration: session.endedAt ? session.endedAt - session.startedAt : null,
-      transcript: session.transcript,
-      segments: session.segments,
-    },
-    null,
-    2,
-  );
-}
-
 async function downloadTextFile(filename: string, mimeType: string, content: string): Promise<void> {
   const blob = new Blob([content], { type: mimeType });
   const objectUrl = URL.createObjectURL(blob);
@@ -852,7 +835,7 @@ function App() {
     }
   };
 
-  const handleExportSession = async (format: 'txt' | 'md' | 'json') => {
+  const handleExportSession = async (format: 'txt' | 'md') => {
     if (!selectedSession) {
       return;
     }
@@ -860,9 +843,8 @@ function App() {
     try {
       setNotesError(null);
 
-      const exportContent =
-        format === 'txt' ? buildTxtExport(selectedSession) : format === 'md' ? buildMarkdownExport(selectedSession) : buildJsonExport(selectedSession);
-      const mimeType = format === 'json' ? 'application/json' : 'text/plain;charset=utf-8';
+      const exportContent = format === 'txt' ? buildTxtExport(selectedSession) : buildMarkdownExport(selectedSession);
+      const mimeType = 'text/plain;charset=utf-8';
       const fileName = getExportFileName(selectedSession, format);
 
       await downloadTextFile(fileName, mimeType, exportContent);
@@ -1070,9 +1052,6 @@ function App() {
                         </button>
                         <button className="button button--secondary" onClick={() => handleExportSession('md')} type="button">
                           Export MD
-                        </button>
-                        <button className="button button--ghost" onClick={() => handleExportSession('json')} type="button">
-                          Export JSON
                         </button>
                       </div>
                     </div>
