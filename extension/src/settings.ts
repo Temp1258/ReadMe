@@ -22,21 +22,14 @@ type LegacySettings = {
   defaultSource?: DefaultSource;
 };
 
-export type ApiKeyFieldName = 'stt.apiKey' | 'sttApiKey' | 'sttapikey' | 'whisperApiKey' | 'openaiApiKey' | 'apiKey' | 'apikey';
-
-export type NormalizedApiKey = {
-  apiKey: string;
-  fieldName: ApiKeyFieldName | null;
-};
-
 export type SttCredentialSummary = {
   provider: SttProvider;
-  apiKey: string;
-  maskedApiKey: string;
   keyPresent: boolean;
+  maskedApiKey: string;
 };
 
 export const SETTINGS_STORAGE_KEY = 'settings';
+const LEGACY_STT_KEYS = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'] as const;
 
 export const defaults: ExtensionSettings = {
   defaultSource: 'microphone',
@@ -62,75 +55,41 @@ function getStorageArea(): chrome.storage.StorageArea | null {
   return chrome.storage.local;
 }
 
-export function getNormalizedApiKey(settings: LegacySettings): NormalizedApiKey {
-  const candidates: Array<{ fieldName: ApiKeyFieldName; value: string | undefined }> = [
-    { fieldName: 'stt.apiKey', value: settings.stt?.apiKey },
-    { fieldName: 'sttApiKey', value: settings.sttApiKey },
-    { fieldName: 'sttapikey', value: settings.sttapikey },
-    { fieldName: 'whisperApiKey', value: settings.whisperApiKey },
-    { fieldName: 'openaiApiKey', value: settings.openaiApiKey },
-    { fieldName: 'apiKey', value: settings.apiKey },
-    { fieldName: 'apikey', value: settings.apikey },
-  ];
+function normalizeSettings(settings: LegacySettings): ExtensionSettings {
+  const nestedApiKey = settings.stt?.apiKey?.trim() ?? '';
+  const legacyApiKey =
+    settings.sttApiKey?.trim() ||
+    settings.sttapikey?.trim() ||
+    settings.whisperApiKey?.trim() ||
+    settings.openaiApiKey?.trim() ||
+    settings.apiKey?.trim() ||
+    settings.apikey?.trim() ||
+    '';
+  const apiKey = nestedApiKey || legacyApiKey;
 
-  for (const candidate of candidates) {
-    const value = candidate.value?.trim();
-    if (value) {
-      return {
-        apiKey: value,
-        fieldName: candidate.fieldName,
-      };
-    }
-  }
+  const configuredProvider = settings.stt?.provider;
+  const provider: SttProvider = configuredProvider === 'openai' || configuredProvider === 'mock' ? configuredProvider : apiKey ? 'openai' : 'mock';
 
   return {
-    apiKey: '',
-    fieldName: null,
-  };
-}
-
-function normalizeSettings(settings: LegacySettings): ExtensionSettings {
-  const normalizedApiKey = getNormalizedApiKey(settings);
-  const providerFromSettings = settings.stt?.provider;
-  const provider: SttProvider =
-    providerFromSettings === 'openai' || providerFromSettings === 'mock'
-      ? providerFromSettings
-      : normalizedApiKey.apiKey
-        ? 'openai'
-        : 'mock';
-
-  const normalized: ExtensionSettings = {
     defaultSource: settings.defaultSource === 'tab' ? 'tab' : defaults.defaultSource,
     stt: {
       provider,
+      ...(apiKey ? { apiKey } : {}),
     },
   };
-
-  if (normalizedApiKey.apiKey) {
-    normalized.stt.apiKey = normalizedApiKey.apiKey;
-  }
-
-  if (provider === 'mock') {
-    delete normalized.stt.apiKey;
-  }
-
-  return normalized;
 }
 
-export function getSttCredentialSummary(settings: ExtensionSettings): SttCredentialSummary {
-  const apiKey = settings.stt.apiKey?.trim() ?? '';
-  const keyPresent = Boolean(apiKey);
-  const provider = settings.stt.provider === 'openai' && keyPresent ? 'openai' : 'mock';
+async function persistSettings(storage: chrome.storage.StorageArea, settings: ExtensionSettings): Promise<void> {
+  await new Promise<void>((resolve) => {
+    storage.set({ [SETTINGS_STORAGE_KEY]: settings }, () => resolve());
+  });
 
-  return {
-    provider,
-    apiKey: provider === 'openai' ? apiKey : '',
-    keyPresent: provider === 'openai' && keyPresent,
-    maskedApiKey: provider === 'openai' && keyPresent ? maskSecret(apiKey) : '',
-  };
+  await new Promise<void>((resolve) => {
+    storage.remove([...LEGACY_STT_KEYS], () => resolve());
+  });
 }
 
-export async function getSettings(): Promise<ExtensionSettings> {
+export async function loadSettings(): Promise<ExtensionSettings> {
   const storage = getStorageArea();
 
   if (!storage) {
@@ -140,44 +99,33 @@ export async function getSettings(): Promise<ExtensionSettings> {
     }
 
     try {
-      const settings = JSON.parse(raw) as LegacySettings;
-      const normalized = normalizeSettings(settings);
-
-      if (JSON.stringify(settings) !== JSON.stringify(normalized)) {
+      const normalized = normalizeSettings(JSON.parse(raw) as LegacySettings);
+      if (JSON.stringify(normalized) !== raw) {
         window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
       }
-
       return normalized;
     } catch {
       return { ...defaults, stt: { ...defaults.stt } };
     }
   }
 
-  return new Promise((resolve) => {
-    storage.get([SETTINGS_STORAGE_KEY, 'sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'], (items) => {
-      const storedSettings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? {};
-
-      const settings: LegacySettings = {
-        ...storedSettings,
-        sttApiKey: storedSettings.sttApiKey ?? (items.sttApiKey as string | undefined),
-        sttapikey: storedSettings.sttapikey ?? (items.sttapikey as string | undefined),
-        whisperApiKey: storedSettings.whisperApiKey ?? (items.whisperApiKey as string | undefined),
-        openaiApiKey: storedSettings.openaiApiKey ?? (items.openaiApiKey as string | undefined),
-        apiKey: storedSettings.apiKey ?? (items.apiKey as string | undefined),
-        apikey: storedSettings.apikey ?? (items.apikey as string | undefined),
-      };
-
-      const normalized = normalizeSettings(settings);
-      const shouldPersist = JSON.stringify(storedSettings) !== JSON.stringify(normalized);
-
-      if (!shouldPersist) {
-        resolve(normalized);
-        return;
-      }
-
-      storage.set({ [SETTINGS_STORAGE_KEY]: normalized }, () => resolve(normalized));
+  const items = await new Promise<Record<string, unknown>>((resolve) => {
+    storage.get([SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS] as string[], (result) => {
+      resolve(result as Record<string, unknown>);
     });
   });
+
+  const storedSettings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? {};
+  const normalized = normalizeSettings({
+    ...storedSettings,
+    ...Object.fromEntries(LEGACY_STT_KEYS.map((key) => [key, items[key] as string | undefined])),
+  });
+
+  if (JSON.stringify(storedSettings) !== JSON.stringify(normalized) || LEGACY_STT_KEYS.some((key) => Boolean(items[key]))) {
+    await persistSettings(storage, normalized);
+  }
+
+  return normalized;
 }
 
 export async function saveSettings(settings: ExtensionSettings): Promise<void> {
@@ -189,7 +137,31 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    storage.set({ [SETTINGS_STORAGE_KEY]: normalized }, () => resolve());
+  await persistSettings(storage, normalized);
+}
+
+export async function loadSttSettings(): Promise<SttSettings> {
+  const settings = await loadSettings();
+  return settings.stt;
+}
+
+export async function saveSttSettings(stt: SttSettings): Promise<void> {
+  const settings = await loadSettings();
+  await saveSettings({
+    ...settings,
+    stt,
   });
+}
+
+export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
+  const stt = await loadSttSettings();
+  const apiKey = stt.apiKey?.trim() ?? '';
+  const keyPresent = Boolean(apiKey);
+  const provider = stt.provider === 'openai' && keyPresent ? 'openai' : 'mock';
+
+  return {
+    provider,
+    keyPresent: provider === 'openai' && keyPresent,
+    maskedApiKey: provider === 'openai' && keyPresent ? maskSecret(apiKey) : '',
+  };
 }

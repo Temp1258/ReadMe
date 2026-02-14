@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
-import { getSettings, getSttCredentialSummary } from './settings';
+import { getSttCredentialSummary, loadSettings } from './settings';
 
 type AuthState = {
   token: string;
@@ -312,7 +312,7 @@ async function readSelectedDeviceId(): Promise<string> {
 }
 
 async function readSelectedAudioSource(): Promise<AudioSource> {
-  const settings = await getSettings();
+  const settings = await loadSettings();
   const fallbackSource = settingsSourceToAudioSource(settings.defaultSource);
   const storage = getStorageArea();
 
@@ -435,8 +435,7 @@ function App() {
       }
     });
 
-    getSettings().then((settings) => {
-      const sttSummary = getSttCredentialSummary(settings);
+    Promise.all([loadSettings(), getSttCredentialSummary()]).then(([settings, sttSummary]) => {
       const label = sttSummary.keyPresent ? `Configured (${sttSummary.maskedApiKey})` : 'Not configured';
       setSttConfiguredLabel(label);
       setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
@@ -579,9 +578,9 @@ function App() {
 
   const sendControlMessage = async (
     message:
-      | {
+        | {
           type: 'START_RECORDING';
-          payload?: { deviceId?: string; source?: AudioSource; streamId?: string; keyPresent?: boolean; provider?: string };
+          payload?: { deviceId?: string; source?: AudioSource; streamId?: string };
         }
       | { type: 'STOP_RECORDING' },
   ) => {
@@ -709,9 +708,6 @@ function App() {
         });
       }
 
-      const settings = await getSettings();
-      const sttSummary = getSttCredentialSummary(settings);
-
       await ensureOffscreenDocument();
       await sendControlMessage({
         type: 'START_RECORDING',
@@ -719,8 +715,6 @@ function App() {
           deviceId: selectedDeviceId,
           source: selectedSource,
           streamId,
-          keyPresent: sttSummary.keyPresent,
-          provider: sttSummary.provider,
         },
       });
     } catch (startError) {
@@ -771,17 +765,12 @@ function App() {
       await persistSelectedDeviceId(deviceId);
 
       if (status === 'Listening' || status === 'Transcribing') {
-        const settings = await getSettings();
-        const sttSummary = getSttCredentialSummary(settings);
-
         await ensureOffscreenDocument();
         await sendControlMessage({
           type: 'START_RECORDING',
           payload: {
             deviceId,
             source: selectedSource,
-            keyPresent: sttSummary.keyPresent,
-            provider: sttSummary.provider,
           },
         });
       }

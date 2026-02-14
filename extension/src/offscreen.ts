@@ -1,5 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { getSettings, getSttCredentialSummary } from './settings';
+import { loadSttSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -13,7 +13,7 @@ type RuntimeMessage =
   | { type: 'GET_AUDIO_STATE' }
   | {
       type: 'START_RECORDING';
-      payload?: { deviceId?: string; source?: AudioSource; streamId?: string; keyPresent?: boolean; provider?: string };
+      payload?: { deviceId?: string; source?: AudioSource; streamId?: string };
     }
   | { type: 'STOP_RECORDING' };
 
@@ -344,11 +344,13 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   });
 
   const stream = await getAudioStream(state.selectedSource, streamId);
-  const settings = await getSettings();
-  const sttCredentials = getSttCredentialSummary(settings);
-  inMemoryApiKey = sttCredentials.apiKey || null;
-  console.info(`STT: settings loaded provider=${sttCredentials.provider} keyPresent=${sttCredentials.keyPresent}`);
-  state.useMockTranscription = !sttCredentials.keyPresent || sttCredentials.provider === 'mock';
+  const sttSettings = await loadSttSettings();
+  const apiKey = sttSettings.apiKey?.trim() ?? '';
+  const keyPresent = Boolean(apiKey);
+  const provider = sttSettings.provider;
+  inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
+  state.useMockTranscription = provider === 'mock' || !keyPresent;
+  console.info(`STT: settings loaded provider=${provider} keyPresent=${keyPresent} storageArea=chrome.storage.local`);
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 
   const sessionId = crypto.randomUUID();

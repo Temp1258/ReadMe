@@ -1,7 +1,15 @@
 import { FormEvent, useEffect, useState } from 'react';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { defaults, getSettings, getSttCredentialSummary, maskSecret, saveSettings, type DefaultSource } from './settings';
+import {
+  defaults,
+  loadSettings,
+  loadSttSettings,
+  maskSecret,
+  saveSettings,
+  saveSttSettings,
+  type DefaultSource,
+} from './settings';
 import './styles.css';
 
 function OptionsPage() {
@@ -13,9 +21,8 @@ function OptionsPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    getSettings().then((settings) => {
-      const summary = getSttCredentialSummary(settings);
-      setStoredApiKey(summary.apiKey);
+    Promise.all([loadSettings(), loadSttSettings()]).then(([settings, stt]) => {
+      setStoredApiKey(stt.apiKey?.trim() ?? '');
       setDefaultSource(settings.defaultSource ?? defaults.defaultSource);
     });
   }, []);
@@ -32,19 +39,25 @@ function OptionsPage() {
       return;
     }
 
-    const nextApiKey = trimmedKey || storedApiKey;
-
     setIsSaving(true);
 
     try {
+      const currentSettings = await loadSettings();
+      const currentStt = await loadSttSettings();
+      const nextStt =
+        trimmedKey.length > 0
+          ? { provider: 'openai' as const, apiKey: trimmedKey }
+          : {
+              provider: currentStt.provider,
+              ...(currentStt.apiKey ? { apiKey: currentStt.apiKey } : {}),
+            };
+
       await saveSettings({
+        ...currentSettings,
         defaultSource,
-        stt: {
-          provider: nextApiKey ? 'openai' : 'mock',
-          apiKey: nextApiKey || undefined,
-        },
+        stt: nextStt,
       });
-      setStoredApiKey(nextApiKey);
+      setStoredApiKey(nextStt.apiKey ?? '');
       setApiKeyInput('');
       setStatusMessage('Settings saved.');
     } catch (saveError) {
@@ -60,12 +73,9 @@ function OptionsPage() {
     setIsSaving(true);
 
     try {
-      await saveSettings({
-        defaultSource,
-        stt: {
-          provider: 'mock',
-        },
-      });
+      await saveSttSettings({ provider: 'mock' });
+      const currentSettings = await loadSettings();
+      await saveSettings({ ...currentSettings, defaultSource });
       setStoredApiKey('');
       setApiKeyInput('');
       setStatusMessage('API key cleared.');
