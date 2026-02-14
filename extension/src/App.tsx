@@ -911,25 +911,30 @@ function App() {
     return (
       <main className="popup">
         <header className="popup__header">
-          <div>
+          <div className="popup__brand">
             <h1>ReadMe</h1>
             <p className="subtitle subtitle--compact">Quick transcription capture</p>
           </div>
-          <button className="button button--ghost" onClick={handleLogout} type="button">
-            Logout
-          </button>
+          <div className="popup__header-actions">
+            <button aria-label="Open settings" className="icon-button" onClick={handleOpenSettings} type="button">
+              ⚙
+            </button>
+            <button className="button button--tertiary" onClick={handleLogout} type="button">
+              Logout
+            </button>
+          </div>
         </header>
 
-        <section className="view-switcher" aria-label="Sections">
+        <section className="segment-control" aria-label="Sections">
           <button
-            className={`view-switcher__button ${activeView === 'transcription' ? 'view-switcher__button--active' : ''}`}
+            className={`segment-control__button ${activeView === 'transcription' ? 'segment-control__button--active' : ''}`}
             onClick={() => setActiveView('transcription')}
             type="button"
           >
             Transcription
           </button>
           <button
-            className={`view-switcher__button ${activeView === 'notes' ? 'view-switcher__button--active' : ''}`}
+            className={`segment-control__button ${activeView === 'notes' ? 'segment-control__button--active' : ''}`}
             onClick={() => setActiveView('notes')}
             type="button"
           >
@@ -938,41 +943,52 @@ function App() {
         </section>
 
         {activeView === 'transcription' ? (
-          <section className="panel panel--transcription">
-            <div className="panel panel--subtle panel--status">
-              <p className="panel__subtitle">Signed in as {auth.email}</p>
-
-              <div className="status-row">
-                <p className="status-row__label">Status</p>
-                <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
+          <section className="transcription-view">
+            <div className="info-row">
+              <div className="info-row__status">
+                <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
+                <p className="info-row__status-text">Status: {status}</p>
               </div>
-              <p className="status-row__hint">{statusHint}</p>
-
-              <p className="warning-text">Warning: recorded audio is sent to a cloud transcription API when an API key is set.</p>
+              <p className="info-row__meta">{sttStatusLine}</p>
             </div>
 
-            <section className="panel panel--subtle panel--controls">
-              <div className="control-bar">
+            <details className="warning-inline">
+              <summary>
+                Warning: audio may be sent to a cloud transcription API.
+                <span className="warning-inline__action">Learn more</span>
+              </summary>
+              <p>When an API key is configured, recorded audio is sent to a cloud transcription API for processing.</p>
+            </details>
+
+            <p className="meta-line">Signed in as {auth.email}</p>
+            <p className="meta-line">
+              {statusHint}
+              <button className="link-button" onClick={handleOpenSettings} type="button">
+                Settings
+              </button>
+            </p>
+
+            <section className="controls-row">
+              {!isRecordingActive ? (
                 <button className="button button--primary" onClick={handleStartListening} type="button">
                   Start
                 </button>
-                <button className="button button--secondary" onClick={handleStopListening} type="button">
+              ) : (
+                <button className="button button--primary" onClick={handleStopListening} type="button">
                   Stop
                 </button>
-                <button className="button button--ghost" onClick={handleClearSessionData} type="button">
-                  Clear data
-                </button>
-                <button className="button button--secondary" onClick={handleOpenSettings} type="button">
-                  Open Settings
-                </button>
-              </div>
+              )}
+              <button className="button button--tertiary" onClick={handleClearSessionData} type="button">
+                Clear
+              </button>
+            </section>
 
-              <p className="status-row__hint">{sttStatusLine}</p>
-
+            <section className="inputs-section">
+              <p className="section-label">Inputs</p>
               <div className="source-grid">
                 <div className="field-group">
                   <label className="form__label" htmlFor="audio-source">
-                    Audio source
+                    Source
                   </label>
                   <select
                     className="form__input"
@@ -987,8 +1003,7 @@ function App() {
                     <option value="tab">Tab audio</option>
                     <option value="mix">Mix (tab + mic)</option>
                   </select>
-                  <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
-                  {isAudioSourceLocked ? <p className="status-row__hint">Audio source is locked while recording. Stop to change.</p> : null}
+                  {isAudioSourceLocked ? <p className="field-hint">Source is locked while recording.</p> : null}
                 </div>
 
                 <div className="field-group">
@@ -1014,8 +1029,10 @@ function App() {
 
             {error && <p className="error">{error}</p>}
 
-            <section className="panel panel--subtle panel--transcript">
-              <h2>Transcript</h2>
+            <section className="transcript-panel">
+              <div className="transcript-panel__header">
+                <h2>Transcript</h2>
+              </div>
               <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
                 {!transcriptText ? <p className="transcript__line transcript__line--muted">No transcript yet. Start recording to begin.</p> : null}
                 {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
@@ -1023,10 +1040,10 @@ function App() {
             </section>
           </section>
         ) : (
-          <section className="panel panel--notes">
+          <section className="notes-view">
             <div className="notes__toolbar">
               <h2>Notes</h2>
-              <button className="button button--ghost" onClick={loadNotesSessions} type="button">
+              <button className="button button--tertiary" onClick={loadNotesSessions} type="button">
                 Refresh
               </button>
             </div>
