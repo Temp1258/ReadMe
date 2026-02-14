@@ -357,16 +357,22 @@ async function getAudioStream(source: AudioSource, streamId?: string): Promise<M
       throw new Error('Missing tab capture stream id. Start from the popup Start button.');
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        mandatory: {
-          chromeMediaSource: 'tab',
-          chromeMediaSourceId: streamId,
-        },
-        suppressLocalAudioPlayback: false,
-      } as MediaTrackConstraints,
-      video: false,
-    });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId,
+            suppressLocalAudioPlayback: false,
+          },
+        } as MediaTrackConstraints,
+        video: false,
+      });
+    } catch (err) {
+      console.error('STT tab getUserMedia failed', err);
+      throw err;
+    }
 
     state.activeInputStream = stream;
 
