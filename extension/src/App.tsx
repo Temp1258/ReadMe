@@ -582,7 +582,8 @@ function App() {
           type: 'START_RECORDING';
           payload?: { deviceId?: string; source?: AudioSource; streamId?: string };
         }
-      | { type: 'STOP_RECORDING' },
+      | { type: 'STOP_RECORDING' }
+      | { type: 'REFRESH_SETTINGS' },
   ) => {
     const sendMessage = chrome.runtime?.sendMessage as ((payload: typeof message) => Promise<{ ok?: boolean; error?: string }>) | undefined;
     if (!sendMessage) {
@@ -709,6 +710,7 @@ function App() {
       }
 
       await ensureOffscreenDocument();
+      await sendControlMessage({ type: 'REFRESH_SETTINGS' });
       await sendControlMessage({
         type: 'START_RECORDING',
         payload: {

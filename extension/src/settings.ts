@@ -43,7 +43,7 @@ export type SttCredentialSummary = {
   configured: boolean;
   provider: SttProvider;
   last4?: string;
-  storageArea: StorageAreaName;
+  backend: StorageBackendName;
   detectedFrom: SttDetectedFrom;
 };
 
@@ -66,8 +66,12 @@ export function maskSecret(secret: string): string {
   return `****${trimmed.slice(-4)}`;
 }
 
-function getStorageAreas(): { local: chrome.storage.StorageArea; sync?: chrome.storage.StorageArea } | null {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+function getStorageAreas(): { local?: chrome.storage.StorageArea; sync?: chrome.storage.StorageArea } | null {
+  if (typeof chrome === 'undefined' || !chrome.storage) {
+    return null;
+  }
+
+  if (!chrome.storage.local && !chrome.storage.sync) {
     return null;
   }
 
@@ -79,19 +83,26 @@ function getStorageAreas(): { local: chrome.storage.StorageArea; sync?: chrome.s
 
 export function isExtensionContext(): boolean {
   try {
-    return typeof location !== 'undefined' && location.protocol === 'chrome-extension:';
+    return (
+      (typeof location !== 'undefined' && location.protocol === 'chrome-extension:') ||
+      Boolean(globalThis.chrome?.runtime?.id)
+    );
   } catch {
     return false;
   }
 }
 
-export function getBackend(): StorageBackendName {
-  if (isExtensionContext()) {
-    if (!globalThis.chrome?.storage?.local) {
-      throw new Error('chrome.storage.local unavailable in extension context');
-    }
+export function resolveStorageBackend(): StorageBackendName {
+  if (!isExtensionContext()) {
+    return 'localStorage';
+  }
 
+  if (globalThis.chrome?.storage?.local) {
     return 'chrome.storage.local';
+  }
+
+  if (globalThis.chrome?.storage?.sync) {
+    return 'chrome.storage.sync';
   }
 
   return 'localStorage';
@@ -176,22 +187,44 @@ async function persistCanonicalSettings(storage: chrome.storage.StorageArea, set
   await storageRemove(storage, [...LEGACY_STT_KEYS]);
 }
 
-export async function loadSettings(): Promise<ExtensionSettings> {
-  const backend = getBackend();
+function cloneDefaults(): ExtensionSettings {
+  return { ...defaults, stt: { ...defaults.stt } };
+}
+
+function getAreaByBackend(
+  backend: StorageBackendName,
+  areas: { local?: chrome.storage.StorageArea; sync?: chrome.storage.StorageArea } | null,
+): chrome.storage.StorageArea | null {
+  if (!areas) {
+    return null;
+  }
 
   if (backend === 'chrome.storage.local') {
-    const areas = getStorageAreas();
+    return areas.local ?? null;
+  }
 
-    if (!areas) {
-      throw new Error('chrome.storage.local unavailable in extension context');
+  if (backend === 'chrome.storage.sync') {
+    return areas.sync ?? null;
+  }
+
+  return null;
+}
+
+export async function loadSettings(): Promise<ExtensionSettings> {
+  const backend = resolveStorageBackend();
+
+  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
+    const storage = getAreaByBackend(backend, getStorageAreas());
+    if (!storage) {
+      return cloneDefaults();
     }
 
-    const items = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const items = await storageGet(storage, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
     const lookup = parseStorageLookup(items);
     const normalized = normalizeSettings(lookup.settings);
 
     if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
-      await persistCanonicalSettings(areas.local, normalized);
+      await persistCanonicalSettings(storage, normalized);
     }
 
     return normalized;
@@ -199,7 +232,7 @@ export async function loadSettings(): Promise<ExtensionSettings> {
 
   const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
   if (!raw) {
-    return { ...defaults, stt: { ...defaults.stt } };
+    return cloneDefaults();
   }
 
   try {
@@ -207,22 +240,21 @@ export async function loadSettings(): Promise<ExtensionSettings> {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
     return normalized;
   } catch {
-    return { ...defaults, stt: { ...defaults.stt } };
+    return cloneDefaults();
   }
 }
 
 export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   const normalized = normalizeSettings(settings);
-  const backend = getBackend();
+  const backend = resolveStorageBackend();
 
-  if (backend === 'chrome.storage.local') {
-    const areas = getStorageAreas();
-
-    if (!areas) {
-      throw new Error('chrome.storage.local unavailable in extension context');
+  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
+    const storage = getAreaByBackend(backend, getStorageAreas());
+    if (!storage) {
+      return;
     }
 
-    await persistCanonicalSettings(areas.local, normalized);
+    await persistCanonicalSettings(storage, normalized);
     return;
   }
 
@@ -230,62 +262,63 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
 }
 
 export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
-  const backend = getBackend();
+  const backend = resolveStorageBackend();
 
-  if (backend === 'chrome.storage.local') {
+  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
     const areas = getStorageAreas();
+    const primaryStorage = getAreaByBackend(backend, areas);
+    const localStorageArea = areas?.local;
+    const syncStorageArea = areas?.sync;
 
-    if (!areas) {
-      throw new Error('chrome.storage.local unavailable in extension context');
+    const lookupStorageAreas: Array<{ area: chrome.storage.StorageArea; areaName: StorageAreaName; backendName: StorageBackendName }> = [];
+
+    if (primaryStorage && backend === 'chrome.storage.local') {
+      lookupStorageAreas.push({ area: primaryStorage, areaName: 'local', backendName: 'chrome.storage.local' });
+      if (syncStorageArea) {
+        lookupStorageAreas.push({ area: syncStorageArea, areaName: 'sync', backendName: 'chrome.storage.sync' });
+      }
+    } else if (primaryStorage && backend === 'chrome.storage.sync') {
+      lookupStorageAreas.push({ area: primaryStorage, areaName: 'sync', backendName: 'chrome.storage.sync' });
+      if (localStorageArea) {
+        lookupStorageAreas.push({ area: localStorageArea, areaName: 'local', backendName: 'chrome.storage.local' });
+      }
     }
 
-    const localItems = await storageGet(areas.local, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-    const localLookup = parseStorageLookup(localItems);
+    for (const candidate of lookupStorageAreas) {
+      const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+      const lookup = parseStorageLookup(items);
 
-    if (localLookup.hasAnySttData) {
-      const normalized = normalizeSettings(localLookup.settings);
-      if (localLookup.detectedFrom !== 'settings.stt.apiKey') {
-        await persistCanonicalSettings(areas.local, {
-          ...(await loadSettings()),
+      if (!lookup.hasAnySttData) {
+        continue;
+      }
+
+      const normalized = normalizeSettings(lookup.settings);
+      const migrationTarget = localStorageArea ?? primaryStorage;
+      if (migrationTarget) {
+        const targetSettings = await loadSettings();
+        await persistCanonicalSettings(migrationTarget, {
+          ...targetSettings,
           stt: normalized.stt,
         });
+
+        if (candidate.area !== migrationTarget) {
+          await storageRemove(candidate.area, [...LEGACY_STT_KEYS]);
+        }
       }
 
       return {
         ...normalized.stt,
-        detectedFrom: localLookup.detectedFrom,
-        storageArea: 'local',
-        backend: 'chrome.storage.local',
+        detectedFrom: lookup.detectedFrom,
+        storageArea: candidate.areaName,
+        backend: localStorageArea ? 'chrome.storage.local' : candidate.backendName,
       };
-    }
-
-    if (areas.sync) {
-      const syncItems = await storageGet(areas.sync, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-      const syncLookup = parseStorageLookup(syncItems);
-
-      if (syncLookup.hasAnySttData) {
-        const normalizedSync = normalizeSettings(syncLookup.settings);
-        const localSettings = await loadSettings();
-        await persistCanonicalSettings(areas.local, {
-          ...localSettings,
-          stt: normalizedSync.stt,
-        });
-        await storageRemove(areas.sync, [...LEGACY_STT_KEYS]);
-
-        return {
-          ...normalizedSync.stt,
-          detectedFrom: syncLookup.detectedFrom,
-          storageArea: 'sync',
-          backend: 'chrome.storage.sync',
-        };
-      }
     }
 
     return {
       provider: 'mock',
       detectedFrom: 'none',
       storageArea: 'none',
-      backend: 'chrome.storage.local',
+      backend,
     };
   }
 
@@ -324,7 +357,7 @@ export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
     configured,
     provider: configured ? 'openai' : 'mock',
     ...(configured ? { last4: apiKey.slice(-4) } : {}),
-    storageArea: stt.storageArea,
+    backend: stt.backend,
     detectedFrom: stt.detectedFrom,
   };
 }

@@ -150,7 +150,7 @@ function OptionsPage() {
           <p>Provider: {sttDiagnostics?.provider ?? 'unknown'}</p>
           <p>Configured: {sttDiagnostics?.configured ? 'true' : 'false'}</p>
           <p>Last4: {sttDiagnostics?.last4 ?? 'n/a'}</p>
-          <p>Storage area: {sttDiagnostics?.storageArea ?? 'unknown'}</p>
+          <p>Backend: {sttDiagnostics?.backend ?? 'unknown'}</p>
           <p>Detected from: {sttDiagnostics?.detectedFrom ?? 'unknown'}</p>
         </div>
       </section>

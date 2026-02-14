@@ -1,5 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { isExtensionContext, loadSttSettings } from './settings';
+import { loadSttSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -15,7 +15,8 @@ type RuntimeMessage =
       type: 'START_RECORDING';
       payload?: { deviceId?: string; source?: AudioSource; streamId?: string };
     }
-  | { type: 'STOP_RECORDING' };
+  | { type: 'STOP_RECORDING' }
+  | { type: 'REFRESH_SETTINGS' };
 
 type RuntimeEventMessage =
   | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number } }
@@ -48,20 +49,12 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   const apiKey = sttSettings.apiKey?.trim() ?? '';
   const keyPresent = sttSettings.provider === 'openai' && Boolean(apiKey);
   const provider = keyPresent ? 'openai' : 'mock';
-  const extensionContext = isExtensionContext();
-
   inMemoryApiKey = provider === 'openai' && keyPresent ? apiKey : null;
   state.useMockTranscription = provider === 'mock';
 
   console.info(
     `STT: backend=${sttSettings.backend} provider=${provider} keyPresent=${keyPresent} detectedFrom=${sttSettings.detectedFrom}`,
   );
-
-  if (extensionContext && sttSettings.backend !== 'chrome.storage.local') {
-    console.error(
-      `STT: invalid backend in extension context backend=${sttSettings.backend} expected=chrome.storage.local detectedFrom=${sttSettings.detectedFrom}`,
-    );
-  }
 
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 }
@@ -446,6 +439,16 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : String(error);
         publishError(messageText);
+        sendResponse({ ok: false, error: messageText });
+      });
+    return true;
+  }
+
+  if (message?.type === 'REFRESH_SETTINGS') {
+    refreshSttRuntimeSettings()
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : String(error);
         sendResponse({ ok: false, error: messageText });
       });
     return true;
