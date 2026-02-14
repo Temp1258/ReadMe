@@ -231,8 +231,8 @@ async function ensureOffscreenDocument(): Promise<void> {
   try {
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT_PATH,
-      reasons: [chrome.offscreen.Reason.USER_MEDIA],
-      justification: 'Run continuous microphone capture while popup is closed.',
+      reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
+      justification: 'Capture audio and keep tab playback audible while recording runs offscreen.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -49,7 +49,11 @@ const state = {
   selectedSource: 'mic' as AudioSource,
   seq: 0,
   activeStream: null as MediaStream | null,
+  activeInputStream: null as MediaStream | null,
   recorder: null as MediaRecorder | null,
+  playbackContext: null as AudioContext | null,
+  playbackSourceNode: null as MediaStreamAudioSourceNode | null,
+  playbackDestinationNode: null as MediaStreamAudioDestinationNode | null,
   chunks: [] as Blob[],
   transcript: '',
   activeSessionId: null as string | null,
@@ -138,11 +142,25 @@ function publishError(message: string): void {
 }
 
 async function stopTracks(): Promise<void> {
-  if (!state.activeStream) {
-    return;
+  if (state.activeInputStream) {
+    state.activeInputStream.getTracks().forEach((track) => track.stop());
+    state.activeInputStream = null;
   }
 
-  state.activeStream.getTracks().forEach((track) => track.stop());
+  if (state.activeStream) {
+    state.activeStream.getTracks().forEach((track) => track.stop());
+  }
+
+  state.playbackSourceNode?.disconnect();
+  state.playbackDestinationNode?.disconnect();
+  state.playbackSourceNode = null;
+  state.playbackDestinationNode = null;
+
+  if (state.playbackContext) {
+    await state.playbackContext.close();
+    state.playbackContext = null;
+  }
+
   state.activeStream = null;
 }
 
@@ -339,23 +357,56 @@ async function getAudioStream(source: AudioSource, streamId?: string): Promise<M
       throw new Error('Missing tab capture stream id. Start from the popup Start button.');
     }
 
-    return navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
           chromeMediaSourceId: streamId,
         },
+        suppressLocalAudioPlayback: false,
       } as MediaTrackConstraints,
       video: false,
     });
+
+    state.activeInputStream = stream;
+
+    const [tabTrack] = stream.getAudioTracks();
+    console.info(
+      `STT: tab stream acquired id=${stream.id} trackCount=${stream.getAudioTracks().length} trackEnabled=${tabTrack?.enabled ?? false} trackMuted=${tabTrack?.muted ?? true} trackReadyState=${tabTrack?.readyState ?? 'none'}`,
+    );
+
+    const context = new AudioContext();
+    const sourceNode = context.createMediaStreamSource(stream);
+    const destinationNode = context.createMediaStreamDestination();
+
+    sourceNode.connect(destinationNode);
+    sourceNode.connect(context.destination);
+
+    state.playbackContext = context;
+    state.playbackSourceNode = sourceNode;
+    state.playbackDestinationNode = destinationNode;
+
+    const [recorderTrack] = destinationNode.stream.getAudioTracks();
+    console.info(
+      `STT: tab recording pipeline ready context=${context.state} recorderTrackCount=${destinationNode.stream.getAudioTracks().length} recorderTrackEnabled=${recorderTrack?.enabled ?? false} recorderTrackMuted=${recorderTrack?.muted ?? true}`,
+    );
+
+    return destinationNode.stream;
   }
 
   const audioConstraint = state.selectedDeviceId === 'default' ? true : { deviceId: { exact: state.selectedDeviceId } };
 
-  return navigator.mediaDevices.getUserMedia({
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: audioConstraint,
     video: false,
   });
+
+  const [micTrack] = stream.getAudioTracks();
+  console.info(
+    `STT: mic stream acquired id=${stream.id} trackCount=${stream.getAudioTracks().length} trackEnabled=${micTrack?.enabled ?? false} trackMuted=${micTrack?.muted ?? true} trackReadyState=${micTrack?.readyState ?? 'none'}`,
+  );
+
+  return stream;
 }
 
 async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string): Promise<void> {
