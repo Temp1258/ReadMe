@@ -1,4 +1,4 @@
-export type SessionSource = 'mic' | 'tab';
+export type SessionSource = 'mic' | 'tab' | 'mix';
 export type SessionStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'error';
 
 export type SessionSegment = {

@@ -5,7 +5,7 @@ export {};
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type PersistedStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'error';
-type AudioSource = 'mic' | 'tab';
+type AudioSource = 'mic' | 'tab' | 'mix';
 
 type RuntimeMessage =
   | { type: 'PING' }
@@ -351,50 +351,75 @@ async function stopRecording(): Promise<void> {
   updateStatus('Stopped', 'Stopped');
 }
 
+async function getTabAudioStream(streamId: string): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: streamId,
+          suppressLocalAudioPlayback: false,
+        },
+      } as MediaTrackConstraints,
+      video: false,
+    });
+  } catch (err) {
+    console.error('STT tab getUserMedia failed', err);
+    throw err;
+  }
+}
+
 async function getAudioStream(source: AudioSource, streamId?: string): Promise<MediaStream> {
-  if (source === 'tab') {
+  if (source === 'tab' || source === 'mix') {
     if (!streamId) {
       throw new Error('Missing tab capture stream id. Start from the popup Start button.');
     }
 
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          mandatory: {
-            chromeMediaSource: 'tab',
-            chromeMediaSourceId: streamId,
-            suppressLocalAudioPlayback: false,
-          },
-        } as MediaTrackConstraints,
-        video: false,
-      });
-    } catch (err) {
-      console.error('STT tab getUserMedia failed', err);
-      throw err;
-    }
+    const tabStream = await getTabAudioStream(streamId);
+    state.activeInputStream = tabStream;
 
-    state.activeInputStream = stream;
-
-    const [tabTrack] = stream.getAudioTracks();
+    const [tabTrack] = tabStream.getAudioTracks();
     console.info(
-      `STT: tab stream acquired id=${stream.id} trackCount=${stream.getAudioTracks().length} trackEnabled=${tabTrack?.enabled ?? false} trackMuted=${tabTrack?.muted ?? true} trackReadyState=${tabTrack?.readyState ?? 'none'}`,
+      `STT: tab stream acquired id=${tabStream.id} trackCount=${tabStream.getAudioTracks().length} trackEnabled=${tabTrack?.enabled ?? false} trackMuted=${tabTrack?.muted ?? true} trackReadyState=${tabTrack?.readyState ?? 'none'}`,
     );
 
     const context = new AudioContext();
-    const sourceNode = context.createMediaStreamSource(stream);
+    const tabSourceNode = context.createMediaStreamSource(tabStream);
     const destinationNode = context.createMediaStreamDestination();
 
-    sourceNode.connect(destinationNode);
-    sourceNode.connect(context.destination);
+    tabSourceNode.connect(destinationNode);
+    tabSourceNode.connect(context.destination);
+
+    let micStream: MediaStream | null = null;
+
+    if (source === 'mix') {
+      const audioConstraint = state.selectedDeviceId === 'default' ? true : { deviceId: { exact: state.selectedDeviceId } };
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraint,
+        video: false,
+      });
+
+      const [micTrack] = micStream.getAudioTracks();
+      console.info(
+        `STT: mic stream for mix acquired id=${micStream.id} trackCount=${micStream.getAudioTracks().length} trackEnabled=${micTrack?.enabled ?? false} trackMuted=${micTrack?.muted ?? true} trackReadyState=${micTrack?.readyState ?? 'none'}`,
+      );
+
+      const micSourceNode = context.createMediaStreamSource(micStream);
+      micSourceNode.connect(destinationNode);
+    }
+
+    state.activeInputStream = new MediaStream([
+      ...tabStream.getTracks(),
+      ...(micStream ? micStream.getTracks() : []),
+    ]);
 
     state.playbackContext = context;
-    state.playbackSourceNode = sourceNode;
+    state.playbackSourceNode = tabSourceNode;
     state.playbackDestinationNode = destinationNode;
 
     const [recorderTrack] = destinationNode.stream.getAudioTracks();
     console.info(
-      `STT: tab recording pipeline ready context=${context.state} recorderTrackCount=${destinationNode.stream.getAudioTracks().length} recorderTrackEnabled=${recorderTrack?.enabled ?? false} recorderTrackMuted=${recorderTrack?.muted ?? true}`,
+      `STT: ${source} recording pipeline ready context=${context.state} recorderTrackCount=${destinationNode.stream.getAudioTracks().length} recorderTrackEnabled=${recorderTrack?.enabled ?? false} recorderTrackMuted=${recorderTrack?.muted ?? true}`,
     );
 
     return destinationNode.stream;
@@ -476,7 +501,8 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   recorder.start(CHUNK_TIMESLICE_MS);
 
   state.recorder = recorder;
-  const sourceDetail = state.selectedSource === 'tab' ? 'active tab audio' : state.selectedDeviceId;
+  const sourceDetail =
+    state.selectedSource === 'tab' ? 'active tab audio' : state.selectedSource === 'mix' ? `tab + mic (${state.selectedDeviceId})` : state.selectedDeviceId;
   updateStatus('Listening', `Listening on ${sourceDetail}`);
 }
 
