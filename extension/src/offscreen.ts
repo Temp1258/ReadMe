@@ -29,10 +29,8 @@ type GetSttSettingsResponse =
       provider: 'openai' | 'mock';
       keyPresent: boolean;
       apiKey?: string;
-      detectedFrom?: string | null;
-      backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
     }
-  | { ok: false; error: string; backend: 'none' };
+  | { ok: false; error: string };
 
 const CHUNK_TIMESLICE_MS = 12_000;
 const CHUNK_MIN_BYTES = 1_024;
@@ -66,7 +64,7 @@ async function refreshSttRuntimeSettings(): Promise<void> {
     const message = response?.error ?? 'Unable to fetch STT settings';
     inMemoryApiKey = null;
     state.useMockTranscription = true;
-    console.warn(`STT: settings unavailable backend=none error=${message}`);
+    console.info(`STT: settings unavailable error=${message}`);
     return;
   }
 
@@ -79,15 +77,11 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   state.useMockTranscription = !shouldUseRealTranscription;
 
   console.info(
-    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} responseKeyPresent=${response.keyPresent} canonicalKeyPresent=${keyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
+    `STT: providerId=${providerId} responseProvider=${response.provider} responseKeyPresent=${response.keyPresent} canonicalKeyPresent=${keyPresent}`,
   );
 
   if (providerId === 'openai' && !response.keyPresent) {
-    console.warn('STT: OpenAI selected but canonical API key is empty; using MOCK mode');
-  }
-
-  if (providerId === 'openai' && response.keyPresent && !keyPresent) {
-    console.warn('STT: keyPresent=true but response apiKey is empty; forcing MOCK mode until settings are saved again');
+    console.info('STT: OpenAI selected but API key is empty; using MOCK mode');
   }
 
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
@@ -578,5 +572,5 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
 
 void refreshSttRuntimeSettings().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.warn(`STT: initial settings refresh failed: ${message}`);
+  console.info(`STT: initial settings refresh failed: ${message}`);
 });

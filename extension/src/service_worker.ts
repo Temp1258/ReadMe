@@ -1,10 +1,4 @@
-import {
-  SETTINGS_STORAGE_KEY,
-  type SttDetectedFrom,
-  type SttProvider,
-} from './settings';
-
-type SttBackend = 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
+import { SETTINGS_STORAGE_KEY, type SttProvider } from './settings';
 
 type GetSttSettingsRequest = { type: 'GET_STT_SETTINGS' };
 
@@ -13,24 +7,11 @@ type GetSttSettingsSuccess = {
   provider: SttProvider;
   keyPresent: boolean;
   apiKey?: string;
-  last4?: string | null;
-  detectedFrom?: string | null;
-  backend: SttBackend;
 };
 
 type GetSttSettingsFailure = {
   ok: false;
   error: string;
-  backend: 'none';
-};
-
-type LegacyItems = {
-  settings?: {
-    stt?: {
-      provider?: unknown;
-      apiKey?: unknown;
-    };
-  };
 };
 
 function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promise<Record<string, unknown>> {
@@ -47,83 +28,39 @@ function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promis
   });
 }
 
-
-function parseSttFromItems(items: Record<string, unknown>): {
-  provider: SttProvider;
-  keyPresent: boolean;
-  apiKey: string;
-  last4: string | null;
-  detectedFrom: SttDetectedFrom;
-} {
-  const settings = ((items[SETTINGS_STORAGE_KEY] as LegacyItems['settings']) ?? {}) as LegacyItems['settings'];
-  const nestedProvider = settings?.stt?.provider;
-  const configuredProvider: SttProvider = nestedProvider === 'openai' || nestedProvider === 'openaiWhisper' ? 'openai' : 'mock';
-
-  const canonicalApiKey = typeof settings?.stt?.apiKey === 'string' ? settings.stt.apiKey : '';
-  const apiKey = canonicalApiKey.trim();
+function parseSttFromItems(items: Record<string, unknown>): { provider: SttProvider; keyPresent: boolean; apiKey?: string } {
+  const settings = (items[SETTINGS_STORAGE_KEY] as { stt?: { provider?: unknown; apiKey?: unknown } } | undefined) ?? {};
+  const rawProvider = settings.stt?.provider;
+  const rawApiKey = settings.stt?.apiKey;
+  const apiKey = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
   const keyPresent = apiKey.length > 0;
-  const detectedFrom: SttDetectedFrom = keyPresent ? 'settings.stt.apiKey' : 'none';
-  const provider: SttProvider = configuredProvider;
+  const provider: SttProvider = rawProvider === 'openai' && keyPresent ? 'openai' : 'mock';
 
   return {
     provider,
     keyPresent,
-    apiKey,
-    last4: keyPresent ? apiKey.slice(-4) : null,
-    detectedFrom,
+    ...(provider === 'openai' ? { apiKey } : {}),
   };
 }
 
 async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
   const localArea = chrome.storage?.local;
-  const syncArea = chrome.storage?.sync;
-
-  const candidates: Array<{ area: chrome.storage.StorageArea; backend: Exclude<SttBackend, 'none'> }> = [];
-  if (localArea) {
-    candidates.push({ area: localArea, backend: 'chrome.storage.local' });
-  }
-  if (syncArea) {
-    candidates.push({ area: syncArea, backend: 'chrome.storage.sync' });
-  }
-
-  if (candidates.length === 0) {
+  if (!localArea) {
     return {
       ok: true,
       provider: 'mock',
       keyPresent: false,
-      last4: null,
-      detectedFrom: 'none',
-      backend: 'none',
     };
   }
 
-  let lastSuccessfulBackend: Exclude<SttBackend, 'none'> = candidates[0].backend;
-
-  for (const candidate of candidates) {
-    const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY]);
-    lastSuccessfulBackend = candidate.backend;
-    const parsed = parseSttFromItems(items);
-
-    if (parsed.provider === 'openai' || parsed.keyPresent) {
-      return {
-        ok: true,
-        provider: parsed.provider,
-        keyPresent: parsed.keyPresent,
-        apiKey: parsed.provider === 'openai' && parsed.keyPresent ? parsed.apiKey : undefined,
-        last4: parsed.last4,
-        detectedFrom: parsed.detectedFrom,
-        backend: candidate.backend,
-      };
-    }
-  }
+  const items = await storageGet(localArea, [SETTINGS_STORAGE_KEY]);
+  const parsed = parseSttFromItems(items);
 
   return {
     ok: true,
-    provider: 'mock',
-    keyPresent: false,
-    last4: null,
-    detectedFrom: 'none',
-    backend: lastSuccessfulBackend,
+    provider: parsed.provider,
+    keyPresent: parsed.keyPresent,
+    ...(parsed.apiKey ? { apiKey: parsed.apiKey } : {}),
   };
 }
 
@@ -140,7 +77,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     })
     .catch((error) => {
       const errorMessage = error instanceof Error ? error.message : 'Unable to read STT settings';
-      sendResponse({ ok: false, error: errorMessage, backend: 'none' } as GetSttSettingsFailure);
+      sendResponse({ ok: false, error: errorMessage } as GetSttSettingsFailure);
     });
 
   return true;

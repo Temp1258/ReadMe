@@ -21,20 +21,7 @@ function formatDetectedSource(
     return 'unknown';
   }
 
-  const sourceLabels: Record<string, string> = {
-    'settings.stt.apiKey': 'settings.stt.apiKey (canonical)',
-    'settings.sttApiKey': 'settings.sttApiKey (legacy)',
-    'settings.whisperApiKey': 'settings.whisperApiKey (legacy)',
-    'topLevel.whisperApiKey': 'top-level whisperApiKey (legacy)',
-    'topLevel.sttApiKey': 'top-level sttApiKey (legacy)',
-    'topLevel.openaiApiKey': 'top-level openaiApiKey (legacy)',
-    'topLevel.sttapikey': 'top-level sttapikey (legacy)',
-    'topLevel.apiKey': 'top-level apiKey (legacy)',
-    'topLevel.apikey': 'top-level apikey (legacy)',
-    none: 'none',
-  };
-
-  const label = sourceLabels[diagnostics.detectedFrom] ?? diagnostics.detectedFrom;
+  const label = diagnostics.detectedFrom === 'settings.stt.apiKey' ? 'settings.stt.apiKey (canonical)' : 'none';
   return diagnostics.last4 ? `${label} · last4=${diagnostics.last4}` : label;
 }
 function parseDefaultSourceInput(source: string): DefaultSource {
