@@ -12,6 +12,7 @@ type GetSttSettingsSuccess = {
   ok: true;
   provider: SttProvider;
   keyPresent: boolean;
+  apiKey?: string;
   last4?: string | null;
   detectedFrom?: string | null;
   backend: SttBackend;
@@ -30,12 +31,6 @@ type LegacyItems = {
       apiKey?: unknown;
     };
   };
-  sttApiKey?: unknown;
-  sttapikey?: unknown;
-  whisperApiKey?: unknown;
-  openaiApiKey?: unknown;
-  apiKey?: unknown;
-  apikey?: unknown;
 };
 
 function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promise<Record<string, unknown>> {
@@ -56,6 +51,7 @@ function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promis
 function parseSttFromItems(items: Record<string, unknown>): {
   provider: SttProvider;
   keyPresent: boolean;
+  apiKey: string;
   last4: string | null;
   detectedFrom: SttDetectedFrom;
 } {
@@ -72,6 +68,7 @@ function parseSttFromItems(items: Record<string, unknown>): {
   return {
     provider,
     keyPresent,
+    apiKey,
     last4: keyPresent ? apiKey.slice(-4) : null,
     detectedFrom,
   };
@@ -112,6 +109,7 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
         ok: true,
         provider: parsed.provider,
         keyPresent: parsed.keyPresent,
+        apiKey: parsed.provider === 'openai' && parsed.keyPresent ? parsed.apiKey : undefined,
         last4: parsed.last4,
         detectedFrom: parsed.detectedFrom,
         backend: candidate.backend,

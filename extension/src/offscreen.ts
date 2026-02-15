@@ -1,5 +1,4 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { loadSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -29,6 +28,7 @@ type GetSttSettingsResponse =
       ok: true;
       provider: 'openai' | 'mock';
       keyPresent: boolean;
+      apiKey?: string;
       detectedFrom?: string | null;
       backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
     }
@@ -71,9 +71,8 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   }
 
   const providerId = response.provider;
-  const canonicalSettings = await loadSettings();
-  const apiKey = canonicalSettings?.stt?.apiKey?.trim() ?? '';
-  const keyPresent = apiKey.length > 0;
+  const apiKey = response.apiKey ?? '';
+  const keyPresent = apiKey.trim().length > 0;
   const shouldUseRealTranscription = response.provider === 'openai' && response.keyPresent === true && keyPresent;
 
   inMemoryApiKey = shouldUseRealTranscription ? apiKey : null;
@@ -88,7 +87,7 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   }
 
   if (providerId === 'openai' && response.keyPresent && !keyPresent) {
-    console.warn('STT: keyPresent=true but canonical settings.stt.apiKey is empty; forcing MOCK mode until settings are saved again');
+    console.warn('STT: keyPresent=true but response apiKey is empty; forcing MOCK mode until settings are saved again');
   }
 
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
