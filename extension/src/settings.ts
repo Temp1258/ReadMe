@@ -4,12 +4,14 @@ export type StorageAreaName = 'local' | 'sync' | 'localStorage' | 'none';
 export type StorageBackendName = 'chrome.storage.local' | 'chrome.storage.sync' | 'localStorage';
 export type SttDetectedFrom =
   | 'settings.stt.apiKey'
-  | 'sttApiKey'
-  | 'sttapikey'
-  | 'whisperApiKey'
-  | 'openaiApiKey'
-  | 'apiKey'
-  | 'apikey'
+  | 'settings.sttApiKey'
+  | 'settings.whisperApiKey'
+  | 'topLevel.whisperApiKey'
+  | 'topLevel.sttApiKey'
+  | 'topLevel.openaiApiKey'
+  | 'topLevel.sttapikey'
+  | 'topLevel.apiKey'
+  | 'topLevel.apikey'
   | 'none';
 
 export type SttSettings = {
@@ -29,7 +31,10 @@ export type ExtensionSettings = {
 };
 
 type LegacySettings = {
-  stt?: Partial<SttSettings>;
+  stt?: {
+    provider?: SttProvider | 'openaiWhisper';
+    apiKey?: string;
+  };
   sttApiKey?: string;
   sttapikey?: string;
   whisperApiKey?: string;
@@ -49,6 +54,54 @@ export type SttCredentialSummary = {
 
 export const SETTINGS_STORAGE_KEY = 'settings';
 const LEGACY_STT_KEYS = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'] as const;
+
+type OpenAiKeyLookupInput = {
+  settings?: {
+    stt?: {
+      apiKey?: unknown;
+    };
+    sttApiKey?: unknown;
+    whisperApiKey?: unknown;
+    sttapikey?: unknown;
+    openaiApiKey?: unknown;
+    apiKey?: unknown;
+    apikey?: unknown;
+  };
+  topLevel?: Record<string, unknown>;
+};
+
+export function getOpenAISttApiKey({ settings, topLevel }: OpenAiKeyLookupInput): { apiKey?: string; detectedFrom: SttDetectedFrom } {
+  const candidateSettings = settings ?? {};
+
+  const orderedCandidates: Array<{ detectedFrom: SttDetectedFrom; value: unknown }> = [
+    { detectedFrom: 'settings.stt.apiKey', value: candidateSettings.stt?.apiKey },
+    { detectedFrom: 'settings.sttApiKey', value: candidateSettings.sttApiKey },
+    { detectedFrom: 'settings.whisperApiKey', value: candidateSettings.whisperApiKey },
+    { detectedFrom: 'topLevel.whisperApiKey', value: topLevel?.whisperApiKey },
+    { detectedFrom: 'topLevel.sttApiKey', value: topLevel?.sttApiKey },
+    { detectedFrom: 'topLevel.openaiApiKey', value: topLevel?.openaiApiKey },
+    { detectedFrom: 'topLevel.sttapikey', value: topLevel?.sttapikey },
+    { detectedFrom: 'topLevel.apiKey', value: topLevel?.apiKey },
+    { detectedFrom: 'topLevel.apikey', value: topLevel?.apikey },
+  ];
+
+  for (const candidate of orderedCandidates) {
+    const key = typeof candidate.value === 'string' ? candidate.value.trim() : '';
+    if (key) {
+      return { apiKey: key, detectedFrom: candidate.detectedFrom };
+    }
+  }
+
+  return { detectedFrom: 'none' };
+}
+
+function resolveSttProvider(provider: unknown): SttProvider {
+  if (provider === 'openai' || provider === 'openaiWhisper') {
+    return 'openai';
+  }
+
+  return 'mock';
+}
 
 export const defaults: ExtensionSettings = {
   defaultSource: 'microphone',
@@ -127,19 +180,11 @@ async function storageRemove(storage: chrome.storage.StorageArea, keys: string[]
 }
 
 function normalizeSettings(settings: LegacySettings): ExtensionSettings {
-  const nestedApiKey = settings.stt?.apiKey?.trim() ?? '';
-  const legacyApiKey =
-    settings.sttApiKey?.trim() ||
-    settings.sttapikey?.trim() ||
-    settings.whisperApiKey?.trim() ||
-    settings.openaiApiKey?.trim() ||
-    settings.apiKey?.trim() ||
-    settings.apikey?.trim() ||
-    '';
-  const apiKey = nestedApiKey || legacyApiKey;
+  const openAiKey = getOpenAISttApiKey({ settings });
+  const apiKey = openAiKey.apiKey ?? '';
 
-  const configuredProvider = settings.stt?.provider;
-  const provider: SttProvider = apiKey ? 'openai' : configuredProvider === 'openai' || configuredProvider === 'mock' ? configuredProvider : 'mock';
+  const configuredProvider = resolveSttProvider(settings.stt?.provider);
+  const provider: SttProvider = apiKey ? 'openai' : configuredProvider;
 
   return {
     defaultSource:
@@ -159,27 +204,23 @@ type StorageLookupResult = {
 
 function parseStorageLookup(items: Record<string, unknown>): StorageLookupResult {
   const settings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? {};
-  const nestedApiKey = settings.stt?.apiKey?.trim() ?? '';
 
-  if (nestedApiKey) {
-    return { settings, detectedFrom: 'settings.stt.apiKey', hasAnySttData: true };
-  }
-
-  for (const key of LEGACY_STT_KEYS) {
-    const value = typeof items[key] === 'string' ? (items[key] as string).trim() : '';
-    if (value) {
-      return {
-        settings: {
-          ...settings,
-          [key]: value,
+  const keyLookup = getOpenAISttApiKey({ settings, topLevel: items });
+  if (keyLookup.apiKey) {
+    return {
+      settings: {
+        ...settings,
+        stt: {
+          ...settings.stt,
+          apiKey: keyLookup.apiKey,
         },
-        detectedFrom: key,
-        hasAnySttData: true,
-      };
-    }
+      },
+      detectedFrom: keyLookup.detectedFrom,
+      hasAnySttData: true,
+    };
   }
 
-  const hasProvider = settings.stt?.provider === 'mock' || settings.stt?.provider === 'openai';
+  const hasProvider = settings.stt?.provider === 'mock' || settings.stt?.provider === 'openai' || settings.stt?.provider === 'openaiWhisper';
   return { settings, detectedFrom: 'none', hasAnySttData: hasProvider };
 }
 

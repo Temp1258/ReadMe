@@ -1,14 +1,9 @@
-import { SETTINGS_STORAGE_KEY, type SttProvider } from './settings';
-
-type SttDetectedFrom =
-  | 'settings.stt.apiKey'
-  | 'sttApiKey'
-  | 'sttapikey'
-  | 'whisperApiKey'
-  | 'openaiApiKey'
-  | 'apiKey'
-  | 'apikey'
-  | 'none';
+import {
+  SETTINGS_STORAGE_KEY,
+  getOpenAISttApiKey,
+  type SttDetectedFrom,
+  type SttProvider,
+} from './settings';
 
 type SttBackend = 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
 
@@ -45,8 +40,6 @@ type LegacyItems = {
   apikey?: unknown;
 };
 
-const LEGACY_STT_KEYS = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'] as const;
-
 function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     storage.get(keys, (items) => {
@@ -61,9 +54,6 @@ function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promis
   });
 }
 
-function getStringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 function parseSttFromItems(items: Record<string, unknown>): {
   provider: SttProvider;
@@ -74,25 +64,11 @@ function parseSttFromItems(items: Record<string, unknown>): {
 } {
   const settings = ((items[SETTINGS_STORAGE_KEY] as LegacyItems['settings']) ?? {}) as LegacyItems['settings'];
   const nestedProvider = settings?.stt?.provider;
-  const configuredProvider: SttProvider = nestedProvider === 'openai' ? 'openai' : 'mock';
+  const configuredProvider: SttProvider = nestedProvider === 'openai' || nestedProvider === 'openaiWhisper' ? 'openai' : 'mock';
 
-  const nestedApiKey = getStringValue(settings?.stt?.apiKey);
-  let detectedFrom: SttDetectedFrom = 'none';
-  let apiKey = '';
-
-  if (nestedApiKey) {
-    apiKey = nestedApiKey;
-    detectedFrom = 'settings.stt.apiKey';
-  } else {
-    for (const legacyKey of LEGACY_STT_KEYS) {
-      const candidate = getStringValue(items[legacyKey]);
-      if (candidate) {
-        apiKey = candidate;
-        detectedFrom = legacyKey;
-        break;
-      }
-    }
-  }
+  const keyLookup = getOpenAISttApiKey({ settings, topLevel: items });
+  const detectedFrom = keyLookup.detectedFrom;
+  const apiKey = keyLookup.apiKey ?? '';
 
   const provider: SttProvider = apiKey ? 'openai' : configuredProvider;
   const keyPresent = provider === 'openai' && Boolean(apiKey);
@@ -133,7 +109,7 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
   let lastSuccessfulBackend: Exclude<SttBackend, 'none'> = candidates[0].backend;
 
   for (const candidate of candidates) {
-    const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY, 'sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey']);
     lastSuccessfulBackend = candidate.backend;
     const parsed = parseSttFromItems(items);
 
