@@ -71,24 +71,24 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   }
 
   const providerId = response.provider;
-  const shouldUseRealTranscription = response.ok && response.provider === 'openai' && response.keyPresent === true;
-
-  const canonicalStt = shouldUseRealTranscription ? await loadSttSettings() : null;
+  const canonicalStt = response.provider === 'openai' ? await loadSttSettings() : null;
   const apiKey = canonicalStt?.apiKey?.trim() ?? '';
+  const canonicalKeyPresent = apiKey.length > 0;
+  const shouldUseRealTranscription = response.provider === 'openai' && response.keyPresent === true && canonicalKeyPresent;
 
   inMemoryApiKey = shouldUseRealTranscription ? apiKey : null;
   state.useMockTranscription = !shouldUseRealTranscription;
 
   console.info(
-    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} keyPresent=${response.keyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
+    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} keyPresent=${response.keyPresent} canonicalKeyPresent=${canonicalKeyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
   );
 
   if (providerId === 'openai' && !response.keyPresent) {
-    console.warn('STT: OpenAI selected but no API key detected in storage; using MOCK mode');
+    console.warn('STT: OpenAI selected but canonical API key is empty; using MOCK mode');
   }
 
-  if (shouldUseRealTranscription && !apiKey) {
-    console.warn('STT: OpenAI key detected but canonical settings key is empty; transcription may fail until settings refresh');
+  if (providerId === 'openai' && response.keyPresent && !canonicalKeyPresent) {
+    console.warn('STT: keyPresent=true but canonical settings.stt.apiKey is empty; forcing MOCK mode until settings are saved again');
   }
 
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
@@ -245,8 +245,13 @@ async function transcribeFullRecording(blob: Blob): Promise<void> {
 
   const filename = getChunkFilename(uploadSeq, blob.type || '');
 
-  if (!apiKey) {
+  if (state.useMockTranscription) {
     await appendTranscript(uploadSeq, `[mock] chunk ${uploadSeq} text`);
+    return;
+  }
+
+  if (!apiKey) {
+    publishError('Missing OpenAI API key for REAL transcription mode.');
     return;
   }
 
