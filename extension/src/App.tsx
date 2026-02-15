@@ -1309,12 +1309,13 @@ function App() {
                   <>
                     <div className="notes-detail__header">
                       <h3 className="notes-detail__title">{t('transcriptTitle')}</h3>
-                      <div className="notes-detail__actions" aria-label={t('export')}>
-                        <button className="button button--secondary button--mini" onClick={() => handleExportSession('txt')} type="button">
-                          TXT
+                      <div className="notes-detail__export-row" aria-label={t('export')}>
+                        <span className="notes-detail__export-label">{t('export')}</span>
+                        <button className="notes-detail__export-link" onClick={() => handleExportSession('txt')} type="button">
+                          [.txt]
                         </button>
-                        <button className="button button--secondary button--mini" onClick={() => handleExportSession('md')} type="button">
-                          MD
+                        <button className="notes-detail__export-link" onClick={() => handleExportSession('md')} type="button">
+                          [.md]
                         </button>
                       </div>
                     </div>
