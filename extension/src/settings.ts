@@ -1,18 +1,8 @@
 export type DefaultSource = 'microphone' | 'tab' | 'mix';
 export type SttProvider = 'mock' | 'openai';
-export type StorageAreaName = 'local' | 'sync' | 'localStorage' | 'none';
-export type StorageBackendName = 'chrome.storage.local' | 'chrome.storage.sync' | 'localStorage';
-export type SttDetectedFrom =
-  | 'settings.stt.apiKey'
-  | 'settings.sttApiKey'
-  | 'settings.whisperApiKey'
-  | 'topLevel.whisperApiKey'
-  | 'topLevel.sttApiKey'
-  | 'topLevel.openaiApiKey'
-  | 'topLevel.sttapikey'
-  | 'topLevel.apiKey'
-  | 'topLevel.apikey'
-  | 'none';
+export type StorageAreaName = 'local' | 'localStorage' | 'none';
+export type StorageBackendName = 'chrome.storage.local' | 'localStorage';
+export type SttDetectedFrom = 'settings.stt.apiKey' | 'none';
 
 export type SttSettings = {
   provider: SttProvider;
@@ -30,20 +20,6 @@ export type ExtensionSettings = {
   defaultSource: DefaultSource;
 };
 
-type LegacySettings = {
-  stt?: {
-    provider?: SttProvider | 'openaiWhisper';
-    apiKey?: string;
-  };
-  sttApiKey?: string;
-  sttapikey?: string;
-  whisperApiKey?: string;
-  openaiApiKey?: string;
-  apiKey?: string;
-  apikey?: string;
-  defaultSource?: DefaultSource;
-};
-
 export type SttCredentialSummary = {
   configured: boolean;
   provider: SttProvider;
@@ -53,62 +29,30 @@ export type SttCredentialSummary = {
 };
 
 export const SETTINGS_STORAGE_KEY = 'settings';
-const LEGACY_STT_KEYS = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'] as const;
-
-type OpenAiKeyLookupInput = {
-  settings?: {
-    stt?: {
-      apiKey?: unknown;
-    };
-    sttApiKey?: unknown;
-    whisperApiKey?: unknown;
-    sttapikey?: unknown;
-    openaiApiKey?: unknown;
-    apiKey?: unknown;
-    apikey?: unknown;
-  };
-  topLevel?: Record<string, unknown>;
-};
-
-export function getOpenAISttApiKey({ settings, topLevel }: OpenAiKeyLookupInput): { apiKey?: string; detectedFrom: SttDetectedFrom } {
-  const candidateSettings = settings ?? {};
-
-  const orderedCandidates: Array<{ detectedFrom: SttDetectedFrom; value: unknown }> = [
-    { detectedFrom: 'settings.stt.apiKey', value: candidateSettings.stt?.apiKey },
-    { detectedFrom: 'settings.sttApiKey', value: candidateSettings.sttApiKey },
-    { detectedFrom: 'settings.whisperApiKey', value: candidateSettings.whisperApiKey },
-    { detectedFrom: 'topLevel.whisperApiKey', value: topLevel?.whisperApiKey },
-    { detectedFrom: 'topLevel.sttApiKey', value: topLevel?.sttApiKey },
-    { detectedFrom: 'topLevel.openaiApiKey', value: topLevel?.openaiApiKey },
-    { detectedFrom: 'topLevel.sttapikey', value: topLevel?.sttapikey },
-    { detectedFrom: 'topLevel.apiKey', value: topLevel?.apiKey },
-    { detectedFrom: 'topLevel.apikey', value: topLevel?.apikey },
-  ];
-
-  for (const candidate of orderedCandidates) {
-    const key = typeof candidate.value === 'string' ? candidate.value.trim() : '';
-    if (key) {
-      return { apiKey: key, detectedFrom: candidate.detectedFrom };
-    }
-  }
-
-  return { detectedFrom: 'none' };
-}
 
 function resolveSttProvider(provider: unknown): SttProvider {
-  if (provider === 'openai' || provider === 'openaiWhisper') {
-    return 'openai';
-  }
-
-  return 'mock';
+  return provider === 'openai' ? 'openai' : 'mock';
 }
 
-export const defaults: ExtensionSettings = {
-  defaultSource: 'microphone',
-  stt: {
-    provider: 'mock',
-  },
-};
+function trimApiKey(apiKey: unknown): string {
+  return typeof apiKey === 'string' ? apiKey.trim() : '';
+}
+
+function normalizeSettings(settings: Partial<ExtensionSettings> | null | undefined): ExtensionSettings {
+  const defaultSource: DefaultSource =
+    settings?.defaultSource === 'tab' || settings?.defaultSource === 'mix' ? settings.defaultSource : 'microphone';
+
+  const apiKey = trimApiKey(settings?.stt?.apiKey);
+  const requestedProvider = resolveSttProvider(settings?.stt?.provider);
+  const provider: SttProvider = requestedProvider === 'openai' && apiKey ? 'openai' : 'mock';
+
+  return {
+    defaultSource,
+    stt: provider === 'openai' ? { provider, apiKey } : { provider: 'mock' },
+  };
+}
+
+export const defaults: ExtensionSettings = normalizeSettings(undefined);
 
 export function maskSecret(secret: string): string {
   const trimmed = secret.trim();
@@ -117,21 +61,6 @@ export function maskSecret(secret: string): string {
   }
 
   return `****${trimmed.slice(-4)}`;
-}
-
-function getStorageAreas(): { local?: chrome.storage.StorageArea; sync?: chrome.storage.StorageArea } | null {
-  if (typeof chrome === 'undefined' || !chrome.storage) {
-    return null;
-  }
-
-  if (!chrome.storage.local && !chrome.storage.sync) {
-    return null;
-  }
-
-  return {
-    local: chrome.storage.local,
-    sync: chrome.storage.sync,
-  };
 }
 
 export function isExtensionContext(): boolean {
@@ -146,16 +75,8 @@ export function isExtensionContext(): boolean {
 }
 
 export function resolveStorageBackend(): StorageBackendName {
-  if (!isExtensionContext()) {
-    return 'localStorage';
-  }
-
-  if (globalThis.chrome?.storage?.local) {
+  if (isExtensionContext() && globalThis.chrome?.storage?.local) {
     return 'chrome.storage.local';
-  }
-
-  if (globalThis.chrome?.storage?.sync) {
-    return 'chrome.storage.sync';
   }
 
   return 'localStorage';
@@ -173,103 +94,21 @@ async function storageSet(storage: chrome.storage.StorageArea, payload: Record<s
   });
 }
 
-async function storageRemove(storage: chrome.storage.StorageArea, keys: string[]): Promise<void> {
-  await new Promise<void>((resolve) => {
-    storage.remove(keys, () => resolve());
-  });
-}
-
-function normalizeSettings(settings: LegacySettings): ExtensionSettings {
-  const openAiKey = getOpenAISttApiKey({ settings });
-  const apiKey = openAiKey.apiKey ?? '';
-
-  const configuredProvider = resolveSttProvider(settings.stt?.provider);
-  const provider: SttProvider = apiKey ? 'openai' : configuredProvider;
-
-  return {
-    defaultSource:
-      settings.defaultSource === 'tab' || settings.defaultSource === 'mix' ? settings.defaultSource : defaults.defaultSource,
-    stt: {
-      provider,
-      ...(provider === 'openai' && apiKey ? { apiKey } : {}),
-    },
-  };
-}
-
-type StorageLookupResult = {
-  settings: LegacySettings;
-  detectedFrom: SttDetectedFrom;
-  hasAnySttData: boolean;
-};
-
-function parseStorageLookup(items: Record<string, unknown>): StorageLookupResult {
-  const settings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? {};
-
-  const keyLookup = getOpenAISttApiKey({ settings, topLevel: items });
-  if (keyLookup.apiKey) {
-    return {
-      settings: {
-        ...settings,
-        stt: {
-          ...settings.stt,
-          apiKey: keyLookup.apiKey,
-        },
-      },
-      detectedFrom: keyLookup.detectedFrom,
-      hasAnySttData: true,
-    };
-  }
-
-  const hasProvider = settings.stt?.provider === 'mock' || settings.stt?.provider === 'openai' || settings.stt?.provider === 'openaiWhisper';
-  return { settings, detectedFrom: 'none', hasAnySttData: hasProvider };
-}
-
-async function persistCanonicalSettings(storage: chrome.storage.StorageArea, settings: ExtensionSettings): Promise<void> {
-  await storageSet(storage, { [SETTINGS_STORAGE_KEY]: settings });
-  await storageRemove(storage, [...LEGACY_STT_KEYS]);
-}
-
 function cloneDefaults(): ExtensionSettings {
   return { ...defaults, stt: { ...defaults.stt } };
-}
-
-function getAreaByBackend(
-  backend: StorageBackendName,
-  areas: { local?: chrome.storage.StorageArea; sync?: chrome.storage.StorageArea } | null,
-): chrome.storage.StorageArea | null {
-  if (!areas) {
-    return null;
-  }
-
-  if (backend === 'chrome.storage.local') {
-    return areas.local ?? null;
-  }
-
-  if (backend === 'chrome.storage.sync') {
-    return areas.sync ?? null;
-  }
-
-  return null;
 }
 
 export async function loadSettings(): Promise<ExtensionSettings> {
   const backend = resolveStorageBackend();
 
-  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
-    const storage = getAreaByBackend(backend, getStorageAreas());
+  if (backend === 'chrome.storage.local') {
+    const storage = globalThis.chrome?.storage?.local;
     if (!storage) {
       return cloneDefaults();
     }
 
-    const items = await storageGet(storage, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-    const lookup = parseStorageLookup(items);
-    const normalized = normalizeSettings(lookup.settings);
-
-    if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
-      await persistCanonicalSettings(storage, normalized);
-    }
-
-    return normalized;
+    const items = await storageGet(storage, [SETTINGS_STORAGE_KEY]);
+    return normalizeSettings((items[SETTINGS_STORAGE_KEY] as Partial<ExtensionSettings> | undefined) ?? undefined);
   }
 
   const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -278,9 +117,7 @@ export async function loadSettings(): Promise<ExtensionSettings> {
   }
 
   try {
-    const normalized = normalizeSettings(JSON.parse(raw) as LegacySettings);
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
-    return normalized;
+    return normalizeSettings(JSON.parse(raw) as Partial<ExtensionSettings>);
   } catch {
     return cloneDefaults();
   }
@@ -290,13 +127,13 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   const normalized = normalizeSettings(settings);
   const backend = resolveStorageBackend();
 
-  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
-    const storage = getAreaByBackend(backend, getStorageAreas());
+  if (backend === 'chrome.storage.local') {
+    const storage = globalThis.chrome?.storage?.local;
     if (!storage) {
       return;
     }
 
-    await persistCanonicalSettings(storage, normalized);
+    await storageSet(storage, { [SETTINGS_STORAGE_KEY]: normalized });
     return;
   }
 
@@ -304,81 +141,24 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
 }
 
 export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
-  const backend = resolveStorageBackend();
-
-  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
-    const localStorageArea = getStorageAreas()?.local;
-    if (!localStorageArea) {
-      return {
-        provider: 'mock',
-        detectedFrom: 'none',
-        storageArea: 'none',
-        backend,
-      };
-    }
-
-    const items = await storageGet(localStorageArea, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-    const rawSettings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? undefined;
-    const rawCanonicalStt = rawSettings?.stt;
-    const hasCanonicalStt = Boolean(rawCanonicalStt);
-
-    if (hasCanonicalStt) {
-      const provider = resolveSttProvider(rawCanonicalStt?.provider);
-      const apiKey = typeof rawCanonicalStt?.apiKey === 'string' ? rawCanonicalStt.apiKey.trim() : '';
-
-      return {
-        provider,
-        ...(apiKey ? { apiKey } : {}),
-        detectedFrom: apiKey ? 'settings.stt.apiKey' : 'none',
-        storageArea: 'local',
-        backend: 'chrome.storage.local',
-      };
-    }
-
-    const lookup = parseStorageLookup(items);
-
-    if (!lookup.hasAnySttData) {
-      return {
-        provider: 'mock',
-        detectedFrom: 'none',
-        storageArea: 'local',
-        backend: 'chrome.storage.local',
-      };
-    }
-
-    const normalized = normalizeSettings(lookup.settings);
-
-    if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
-      await persistCanonicalSettings(localStorageArea, normalized);
-    }
-
-    return {
-      ...normalized.stt,
-      detectedFrom: lookup.detectedFrom,
-      storageArea: 'local',
-      backend: 'chrome.storage.local',
-    };
-  }
-
   const settings = await loadSettings();
+  const apiKey = trimApiKey(settings.stt.apiKey);
+  const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
 
   return {
-    ...settings.stt,
-    detectedFrom: settings.stt.apiKey ? 'settings.stt.apiKey' : 'none',
-    storageArea: 'localStorage',
-    backend: 'localStorage',
+    provider,
+    ...(provider === 'openai' ? { apiKey } : {}),
+    detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
+    storageArea: resolveStorageBackend() === 'chrome.storage.local' ? 'local' : 'localStorage',
+    backend: resolveStorageBackend(),
   };
 }
 
 export async function saveSttSettings(stt: { apiKey?: string; provider?: SttProvider }): Promise<void> {
   const settings = await loadSettings();
-  const nextApiKey = stt.apiKey?.trim() ?? '';
+  const nextApiKey = trimApiKey(stt.apiKey);
   const nextStt: SttSettings =
-    stt.provider === 'mock'
-      ? { provider: 'mock' }
-      : nextApiKey
-        ? { provider: 'openai', apiKey: nextApiKey }
-        : { provider: 'mock' };
+    stt.provider === 'openai' && nextApiKey ? { provider: 'openai', apiKey: nextApiKey } : { provider: 'mock' };
 
   await saveSettings({
     ...settings,
@@ -388,7 +168,7 @@ export async function saveSttSettings(stt: { apiKey?: string; provider?: SttProv
 
 export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
   const stt = await loadSttSettings();
-  const apiKey = stt.apiKey?.trim() ?? '';
+  const apiKey = trimApiKey(stt.apiKey);
   const configured = stt.provider === 'openai' && Boolean(apiKey);
 
   return {
