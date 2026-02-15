@@ -99,45 +99,40 @@ function cloneDefaults(): ExtensionSettings {
 }
 
 export async function loadSettings(): Promise<ExtensionSettings> {
-  const backend = resolveStorageBackend();
-
-  if (backend === 'chrome.storage.local') {
-    const storage = globalThis.chrome?.storage?.local;
-    if (!storage) {
-      return cloneDefaults();
-    }
-
-    const items = await storageGet(storage, [SETTINGS_STORAGE_KEY]);
-    return normalizeSettings((items[SETTINGS_STORAGE_KEY] as Partial<ExtensionSettings> | undefined) ?? undefined);
-  }
-
-  const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-  if (!raw) {
-    return cloneDefaults();
-  }
-
+  let backend: StorageBackendName;
   try {
-    return normalizeSettings(JSON.parse(raw) as Partial<ExtensionSettings>);
+    backend = resolveStorageBackend();
   } catch {
     return cloneDefaults();
   }
+
+  if (backend !== 'chrome.storage.local') {
+    return cloneDefaults();
+  }
+
+  const storage = globalThis.chrome?.storage?.local;
+  if (!storage) {
+    return cloneDefaults();
+  }
+
+  const items = await storageGet(storage, [SETTINGS_STORAGE_KEY]);
+  return normalizeSettings((items[SETTINGS_STORAGE_KEY] as Partial<ExtensionSettings> | undefined) ?? undefined);
 }
 
 export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   const normalized = normalizeSettings(settings);
   const backend = resolveStorageBackend();
 
-  if (backend === 'chrome.storage.local') {
-    const storage = globalThis.chrome?.storage?.local;
-    if (!storage) {
-      return;
-    }
-
-    await storageSet(storage, { [SETTINGS_STORAGE_KEY]: normalized });
-    return;
+  if (backend !== 'chrome.storage.local') {
+    throw new Error('chrome.storage.local is unavailable');
   }
 
-  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+  const storage = globalThis.chrome?.storage?.local;
+  if (!storage) {
+    throw new Error('chrome.storage.local is unavailable');
+  }
+
+  await storageSet(storage, { [SETTINGS_STORAGE_KEY]: normalized });
 }
 
 export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
