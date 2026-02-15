@@ -1,4 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
+import { loadSttSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -27,7 +28,6 @@ type GetSttSettingsResponse =
   | {
       ok: true;
       provider: 'openai' | 'mock';
-      apiKey?: string | null;
       keyPresent: boolean;
       last4?: string | null;
       detectedFrom?: string | null;
@@ -71,11 +71,12 @@ async function refreshSttRuntimeSettings(): Promise<void> {
     return;
   }
 
-  const apiKey = response.apiKey?.trim() ?? '';
-  const provider = response.provider === 'openai' && apiKey ? 'openai' : 'mock';
+  const canonicalStt = await loadSttSettings();
+  const apiKey = canonicalStt.apiKey?.trim() ?? '';
+  const provider = response.provider === 'openai' && response.keyPresent ? 'openai' : 'mock';
 
   inMemoryApiKey = provider === 'openai' ? apiKey : null;
-  state.useMockTranscription = provider === 'mock';
+  state.useMockTranscription = provider !== 'openai' || !inMemoryApiKey;
 
   console.info(
     `STT: backend=${response.backend} provider=${provider} keyPresent=${response.keyPresent} last4=${response.last4 ?? 'n/a'} detectedFrom=${response.detectedFrom ?? 'none'}`,
