@@ -13,6 +13,30 @@ import {
 } from './settings';
 import './styles.css';
 
+
+function formatDetectedSource(
+  diagnostics: Awaited<ReturnType<typeof getSttCredentialSummary>> | null,
+): string {
+  if (!diagnostics) {
+    return 'unknown';
+  }
+
+  const sourceLabels: Record<string, string> = {
+    'settings.stt.apiKey': 'settings.stt.apiKey (canonical)',
+    'settings.sttApiKey': 'settings.sttApiKey (legacy)',
+    'settings.whisperApiKey': 'settings.whisperApiKey (legacy)',
+    'topLevel.whisperApiKey': 'top-level whisperApiKey (legacy)',
+    'topLevel.sttApiKey': 'top-level sttApiKey (legacy)',
+    'topLevel.openaiApiKey': 'top-level openaiApiKey (legacy)',
+    'topLevel.sttapikey': 'top-level sttapikey (legacy)',
+    'topLevel.apiKey': 'top-level apiKey (legacy)',
+    'topLevel.apikey': 'top-level apikey (legacy)',
+    none: 'none',
+  };
+
+  const label = sourceLabels[diagnostics.detectedFrom] ?? diagnostics.detectedFrom;
+  return diagnostics.last4 ? `${label} · last4=${diagnostics.last4}` : label;
+}
 function parseDefaultSourceInput(source: string): DefaultSource {
   return source === 'tab' || source === 'mix' ? source : 'microphone';
 }
@@ -159,7 +183,7 @@ function OptionsPage() {
           <p>Configured: {sttDiagnostics?.configured ? 'true' : 'false'}</p>
           <p>Last4: {sttDiagnostics?.last4 ?? 'n/a'}</p>
           <p>Backend: {sttDiagnostics?.backend ?? 'unknown'}</p>
-          <p>Detected from: {sttDiagnostics?.detectedFrom ?? 'unknown'}</p>
+          <p>Detected from: {formatDetectedSource(sttDiagnostics)}</p>
         </div>
       </section>
     </main>
