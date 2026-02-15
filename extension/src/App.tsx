@@ -1312,10 +1312,10 @@ function App() {
                       <div className="notes-detail__export-row" aria-label={t('export')}>
                         <span className="notes-detail__export-label">{t('export')}</span>
                         <button className="notes-detail__export-link" onClick={() => handleExportSession('txt')} type="button">
-                          [.txt]
+                          .txt
                         </button>
                         <button className="notes-detail__export-link" onClick={() => handleExportSession('md')} type="button">
-                          [.md]
+                          .md
                         </button>
                       </div>
                     </div>
