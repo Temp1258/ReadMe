@@ -40,11 +40,7 @@ type GetSttSettingsResponse =
       error: string;
     };
 
-function settingsSourceToAudioSource(source?: string): AudioSource {
-  return source === 'tab' || source === 'mix' ? source : 'mic';
-}
-
-function parseAudioSourceInput(source: string): AudioSource {
+function normalizeAudioSource(source?: string): AudioSource {
   return source === 'tab' || source === 'mix' ? source : 'mic';
 }
 
@@ -436,7 +432,7 @@ async function readSelectedDeviceId(): Promise<string> {
 
 async function readSelectedAudioSource(): Promise<AudioSource> {
   const settings = await loadSettings();
-  const fallbackSource = settingsSourceToAudioSource(settings.defaultSource);
+  const fallbackSource = normalizeAudioSource(settings.defaultSource);
   const storage = getStorageArea();
 
   if (!storage) {
@@ -652,7 +648,7 @@ function App() {
         if (sttSummary.error) {
           setError(sttSummary.error);
         }
-        setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
+        setSelectedSource(normalizeAudioSource(settings.defaultSource));
         setUITheme(savedTheme);
         setUILang(savedLang);
       },
@@ -984,10 +980,6 @@ function App() {
     try {
       setSelectedSource(source);
       await persistSelectedAudioSource(source);
-
-      if (status === 'Listening' || status === 'Transcribing') {
-        await handleStartListening();
-      }
     } catch (sourceError) {
       const message = sourceError instanceof Error ? sourceError.message : 'Unable to switch audio source.';
       setStatus('Error');
@@ -1193,7 +1185,7 @@ function App() {
                     disabled={isAudioSourceLocked}
                     id="audio-source"
                     onChange={(event) =>
-                      handleSourceChange(parseAudioSourceInput(event.target.value))
+                      handleSourceChange(normalizeAudioSource(event.target.value))
                     }
                     value={selectedSource}
                   >
