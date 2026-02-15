@@ -318,6 +318,23 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
     }
 
     const items = await storageGet(localStorageArea, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const rawSettings = (items[SETTINGS_STORAGE_KEY] as LegacySettings | undefined) ?? undefined;
+    const rawCanonicalStt = rawSettings?.stt;
+    const hasCanonicalStt = Boolean(rawCanonicalStt);
+
+    if (hasCanonicalStt) {
+      const provider = resolveSttProvider(rawCanonicalStt?.provider);
+      const apiKey = typeof rawCanonicalStt?.apiKey === 'string' ? rawCanonicalStt.apiKey.trim() : '';
+
+      return {
+        provider,
+        ...(apiKey ? { apiKey } : {}),
+        detectedFrom: apiKey ? 'settings.stt.apiKey' : 'none',
+        storageArea: 'local',
+        backend: 'chrome.storage.local',
+      };
+    }
+
     const lookup = parseStorageLookup(items);
 
     if (!lookup.hasAnySttData) {

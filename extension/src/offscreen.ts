@@ -70,10 +70,11 @@ async function refreshSttRuntimeSettings(): Promise<void> {
     return;
   }
 
-  const canonicalStt = await loadSttSettings();
-  const providerId = canonicalStt.provider;
-  const shouldUseRealTranscription = providerId === 'openai' && response.provider === 'openai' && response.keyPresent;
-  const apiKey = canonicalStt.apiKey?.trim() ?? '';
+  const providerId = response.provider;
+  const shouldUseRealTranscription = response.ok && response.provider === 'openai' && response.keyPresent === true;
+
+  const canonicalStt = shouldUseRealTranscription ? await loadSttSettings() : null;
+  const apiKey = canonicalStt?.apiKey?.trim() ?? '';
 
   inMemoryApiKey = shouldUseRealTranscription ? apiKey : null;
   state.useMockTranscription = !shouldUseRealTranscription;
@@ -82,7 +83,7 @@ async function refreshSttRuntimeSettings(): Promise<void> {
     `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} keyPresent=${response.keyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
   );
 
-  if (providerId === 'openai' && response.provider === 'openai' && !response.keyPresent) {
+  if (providerId === 'openai' && !response.keyPresent) {
     console.warn('STT: OpenAI selected but no API key detected in storage; using MOCK mode');
   }
 
