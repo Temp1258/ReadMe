@@ -78,20 +78,26 @@ function OptionsPage() {
     setIsSaving(true);
 
     try {
-      const currentSettings = await loadSettings();
-      await saveSttSettings({ apiKey: trimmedKey });
+      const previousSettings = await loadSettings();
+      const nextSettings = trimmedKey
+        ? {
+            ...previousSettings,
+            defaultSource,
+            stt: {
+              ...previousSettings.stt,
+              provider: 'openai' as const,
+              apiKey: trimmedKey,
+            },
+          }
+        : {
+            ...previousSettings,
+            defaultSource,
+          };
+
+      await saveSettings(nextSettings);
 
       const updatedStt = await loadSttSettings();
-
-      await saveSettings({
-        ...currentSettings,
-        defaultSource,
-        stt: {
-          provider: updatedStt.provider,
-          ...(updatedStt.apiKey ? { apiKey: updatedStt.apiKey } : {}),
-        },
-      });
-      setStoredApiKey(updatedStt.apiKey ?? '');
+      setStoredApiKey(updatedStt.apiKey?.trim() ?? '');
       setApiKeyInput('');
       await refreshSttDiagnostics();
       setStatusMessage('Settings saved.');

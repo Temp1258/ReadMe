@@ -1,5 +1,5 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { loadSttSettings } from './settings';
+import { loadSettings } from './settings';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -71,23 +71,23 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   }
 
   const providerId = response.provider;
-  const canonicalStt = response.provider === 'openai' ? await loadSttSettings() : null;
-  const apiKey = canonicalStt?.apiKey?.trim() ?? '';
-  const canonicalKeyPresent = apiKey.length > 0;
-  const shouldUseRealTranscription = response.provider === 'openai' && response.keyPresent === true && canonicalKeyPresent;
+  const canonicalSettings = await loadSettings();
+  const apiKey = canonicalSettings?.stt?.apiKey?.trim() ?? '';
+  const keyPresent = apiKey.length > 0;
+  const shouldUseRealTranscription = response.provider === 'openai' && response.keyPresent === true && keyPresent;
 
   inMemoryApiKey = shouldUseRealTranscription ? apiKey : null;
   state.useMockTranscription = !shouldUseRealTranscription;
 
   console.info(
-    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} keyPresent=${response.keyPresent} canonicalKeyPresent=${canonicalKeyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
+    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} responseKeyPresent=${response.keyPresent} canonicalKeyPresent=${keyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
   );
 
   if (providerId === 'openai' && !response.keyPresent) {
     console.warn('STT: OpenAI selected but canonical API key is empty; using MOCK mode');
   }
 
-  if (providerId === 'openai' && response.keyPresent && !canonicalKeyPresent) {
+  if (providerId === 'openai' && response.keyPresent && !keyPresent) {
     console.warn('STT: keyPresent=true but canonical settings.stt.apiKey is empty; forcing MOCK mode until settings are saved again');
   }
 
