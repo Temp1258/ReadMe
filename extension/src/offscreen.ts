@@ -29,7 +29,6 @@ type GetSttSettingsResponse =
       ok: true;
       provider: 'openai' | 'mock';
       keyPresent: boolean;
-      last4?: string | null;
       detectedFrom?: string | null;
       backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
     }
@@ -72,15 +71,25 @@ async function refreshSttRuntimeSettings(): Promise<void> {
   }
 
   const canonicalStt = await loadSttSettings();
+  const providerId = canonicalStt.provider;
+  const shouldUseRealTranscription = providerId === 'openai' && response.provider === 'openai' && response.keyPresent;
   const apiKey = canonicalStt.apiKey?.trim() ?? '';
-  const provider = response.provider === 'openai' && response.keyPresent ? 'openai' : 'mock';
 
-  inMemoryApiKey = provider === 'openai' ? apiKey : null;
-  state.useMockTranscription = provider !== 'openai' || !inMemoryApiKey;
+  inMemoryApiKey = shouldUseRealTranscription ? apiKey : null;
+  state.useMockTranscription = !shouldUseRealTranscription;
 
   console.info(
-    `STT: backend=${response.backend} provider=${provider} keyPresent=${response.keyPresent} last4=${response.last4 ?? 'n/a'} detectedFrom=${response.detectedFrom ?? 'none'}`,
+    `STT: backend=${response.backend} providerId=${providerId} responseProvider=${response.provider} keyPresent=${response.keyPresent} detectedFrom=${response.detectedFrom ?? 'none'}`,
   );
+
+  if (providerId === 'openai' && response.provider === 'openai' && !response.keyPresent) {
+    console.warn('STT: OpenAI selected but no API key detected in storage; using MOCK mode');
+  }
+
+  if (shouldUseRealTranscription && !apiKey) {
+    console.warn('STT: OpenAI key detected but canonical settings key is empty; transcription may fail until settings refresh');
+  }
+
   console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
 }
 
