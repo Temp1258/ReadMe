@@ -38,8 +38,11 @@ The production build output is generated in `extension/dist`.
 2. Open Chrome and go to `chrome://extensions`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the `extension/dist` folder.
-6. Open the extension popup.
+5. Select the `extension` folder (the root `manifest.json` points Chrome to built files under `dist/`).
+6. After every rebuild, click **Reload** on the extension card to pick up the newest `dist` bundle.
+7. Open the extension popup.
+
+The runtime pages should come from `dist/*` (for example `chrome-extension://<id>/dist/src/offscreen.html`), not from `src/*`.
 
 ## Login flow (Issue #2)
 

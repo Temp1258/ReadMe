@@ -204,7 +204,7 @@ const UI_THEME_STORAGE_KEY = 'uiTheme';
 const UI_LANG_STORAGE_KEY = 'uiLang';
 const DEFAULT_API_BASE_URL = 'http://localhost:8080';
 const DEV_MOCK_TOKEN = 'dev-mock-token';
-const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
+const OFFSCREEN_DOCUMENT_PATH = 'dist/src/offscreen.html';
 
 type RuntimeContext = {
   contextType: string;
