@@ -107,8 +107,7 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  min-height: 560px;
-  max-height: 700px;
+  min-height: 100%;
   max-width: 100%;
   overflow-x: hidden;
   overflow-y: auto;
@@ -456,35 +455,25 @@ h3 {
   justify-content: flex-end;
 }
 
+.notes-detail__header {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.notes-detail__title {
+  text-align: center;
+  width: 100%;
+}
+
 .notes-detail__actions {
   align-items: center;
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.notes-detail__header {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  justify-content: space-between;
-}
-
-.notes-detail__export-group {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-  margin-left: auto;
-}
-
-.notes-detail__export-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  gap: 8px;
+  justify-content: center;
 }
 
 .transcript {
@@ -497,6 +486,12 @@ h3 {
   overflow-y: auto;
   padding: 12px;
   width: 100%;
+}
+
+.notes-detail__transcript {
+  flex: 0 1 auto;
+  max-height: 280px;
+  min-height: 260px;
 }
 
 .transcript__line {
@@ -604,25 +599,6 @@ h3 {
   color: #b03333;
 }
 
-.notes-segments {
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.45;
-  margin: 0;
-  max-height: 170px;
-  overflow-y: auto;
-  padding-left: 16px;
-}
-
-.notes-segments li {
-  margin-bottom: 6px;
-}
-
-.notes-segments__meta {
-  color: var(--muted);
-  font-weight: 600;
-}
-
 .toast {
   background: var(--text);
   border-radius: 8px;
@@ -687,6 +663,12 @@ h3 {
   padding: 4px 8px;
 }
 
+.button--mini {
+  font-size: 11px;
+  height: 29px;
+  padding: 0 10px;
+}
+
 .settings-link {
   align-self: flex-start;
 }
@@ -718,11 +700,6 @@ h3 {
 
   .notes-layout {
     grid-template-columns: 1fr;
-  }
-
-  .notes-detail__export-group {
-    justify-content: flex-end;
-    width: 100%;
   }
 
   .notes-list {
