@@ -307,60 +307,39 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
   const backend = resolveStorageBackend();
 
   if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
-    const areas = getStorageAreas();
-    const primaryStorage = getAreaByBackend(backend, areas);
-    const localStorageArea = areas?.local;
-    const syncStorageArea = areas?.sync;
-
-    const lookupStorageAreas: Array<{ area: chrome.storage.StorageArea; areaName: StorageAreaName; backendName: StorageBackendName }> = [];
-
-    if (primaryStorage && backend === 'chrome.storage.local') {
-      lookupStorageAreas.push({ area: primaryStorage, areaName: 'local', backendName: 'chrome.storage.local' });
-      if (syncStorageArea) {
-        lookupStorageAreas.push({ area: syncStorageArea, areaName: 'sync', backendName: 'chrome.storage.sync' });
-      }
-    } else if (primaryStorage && backend === 'chrome.storage.sync') {
-      lookupStorageAreas.push({ area: primaryStorage, areaName: 'sync', backendName: 'chrome.storage.sync' });
-      if (localStorageArea) {
-        lookupStorageAreas.push({ area: localStorageArea, areaName: 'local', backendName: 'chrome.storage.local' });
-      }
-    }
-
-    for (const candidate of lookupStorageAreas) {
-      const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
-      const lookup = parseStorageLookup(items);
-
-      if (!lookup.hasAnySttData) {
-        continue;
-      }
-
-      const normalized = normalizeSettings(lookup.settings);
-      const migrationTarget = localStorageArea ?? primaryStorage;
-      if (migrationTarget) {
-        const targetSettings = await loadSettings();
-        await persistCanonicalSettings(migrationTarget, {
-          ...targetSettings,
-          stt: normalized.stt,
-        });
-
-        if (candidate.area !== migrationTarget) {
-          await storageRemove(candidate.area, [...LEGACY_STT_KEYS]);
-        }
-      }
-
+    const localStorageArea = getStorageAreas()?.local;
+    if (!localStorageArea) {
       return {
-        ...normalized.stt,
-        detectedFrom: lookup.detectedFrom,
-        storageArea: candidate.areaName,
-        backend: localStorageArea ? 'chrome.storage.local' : candidate.backendName,
+        provider: 'mock',
+        detectedFrom: 'none',
+        storageArea: 'none',
+        backend,
       };
     }
 
+    const items = await storageGet(localStorageArea, [SETTINGS_STORAGE_KEY, ...LEGACY_STT_KEYS]);
+    const lookup = parseStorageLookup(items);
+
+    if (!lookup.hasAnySttData) {
+      return {
+        provider: 'mock',
+        detectedFrom: 'none',
+        storageArea: 'local',
+        backend: 'chrome.storage.local',
+      };
+    }
+
+    const normalized = normalizeSettings(lookup.settings);
+
+    if (JSON.stringify(lookup.settings) !== JSON.stringify(normalized) || lookup.detectedFrom !== 'none') {
+      await persistCanonicalSettings(localStorageArea, normalized);
+    }
+
     return {
-      provider: 'mock',
-      detectedFrom: 'none',
-      storageArea: 'none',
-      backend,
+      ...normalized.stt,
+      detectedFrom: lookup.detectedFrom,
+      storageArea: 'local',
+      backend: 'chrome.storage.local',
     };
   }
 

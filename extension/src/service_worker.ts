@@ -12,7 +12,6 @@ type GetSttSettingsRequest = { type: 'GET_STT_SETTINGS' };
 type GetSttSettingsSuccess = {
   ok: true;
   provider: SttProvider;
-  apiKey?: string | null;
   keyPresent: boolean;
   last4?: string | null;
   detectedFrom?: string | null;
@@ -57,7 +56,6 @@ function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promis
 
 function parseSttFromItems(items: Record<string, unknown>): {
   provider: SttProvider;
-  apiKey: string;
   keyPresent: boolean;
   last4: string | null;
   detectedFrom: SttDetectedFrom;
@@ -75,7 +73,6 @@ function parseSttFromItems(items: Record<string, unknown>): {
 
   return {
     provider,
-    apiKey,
     keyPresent,
     last4: keyPresent ? apiKey.slice(-4) : null,
     detectedFrom,
@@ -98,7 +95,6 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
     return {
       ok: true,
       provider: 'mock',
-      apiKey: null,
       keyPresent: false,
       last4: null,
       detectedFrom: 'none',
@@ -117,7 +113,6 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
       return {
         ok: true,
         provider: parsed.provider,
-        apiKey: parsed.apiKey || null,
         keyPresent: parsed.keyPresent,
         last4: parsed.last4,
         detectedFrom: parsed.detectedFrom,
@@ -129,7 +124,6 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
   return {
     ok: true,
     provider: 'mock',
-    apiKey: null,
     keyPresent: false,
     last4: null,
     detectedFrom: 'none',
