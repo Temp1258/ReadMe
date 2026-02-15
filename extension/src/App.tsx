@@ -33,6 +33,7 @@ type GetSttSettingsResponse =
       ok: true;
       provider: 'openai' | 'mock';
       keyPresent: boolean;
+      apiKey?: string;
       last4?: string | null;
       detectedFrom?: string | null;
       backend: 'chrome.storage.local' | 'chrome.storage.sync' | 'none';
