@@ -1,6 +1,6 @@
 export type DefaultSource = 'microphone' | 'tab' | 'mix';
 export type SttProvider = 'mock' | 'openai';
-export type StorageAreaName = 'local' | 'localStorage' | 'none';
+type StorageAreaName = 'local' | 'localStorage';
 export type StorageBackendName = 'chrome.storage.local' | 'localStorage';
 export type SttDetectedFrom = 'settings.stt.apiKey' | 'none';
 
@@ -9,7 +9,7 @@ export type SttSettings = {
   apiKey?: string;
 };
 
-export type SttSettingsLoadResult = SttSettings & {
+type SttSettingsLoadResult = SttSettings & {
   detectedFrom: SttDetectedFrom;
   storageArea: StorageAreaName;
   backend: StorageBackendName;
@@ -20,7 +20,7 @@ export type ExtensionSettings = {
   defaultSource: DefaultSource;
 };
 
-export type SttCredentialSummary = {
+type SttCredentialSummary = {
   configured: boolean;
   provider: SttProvider;
   last4?: string;
@@ -63,7 +63,7 @@ export function maskSecret(secret: string): string {
   return `****${trimmed.slice(-4)}`;
 }
 
-export function isExtensionContext(): boolean {
+function isExtensionContext(): boolean {
   try {
     return (
       (typeof location !== 'undefined' && location.protocol === 'chrome-extension:') ||
@@ -74,7 +74,7 @@ export function isExtensionContext(): boolean {
   }
 }
 
-export function resolveStorageBackend(): StorageBackendName {
+function resolveStorageBackend(): StorageBackendName {
   if (isExtensionContext() && globalThis.chrome?.storage?.local) {
     return 'chrome.storage.local';
   }
@@ -144,13 +144,14 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
   const settings = await loadSettings();
   const apiKey = trimApiKey(settings.stt.apiKey);
   const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
+  const backend = resolveStorageBackend();
 
   return {
     provider,
     ...(provider === 'openai' ? { apiKey } : {}),
     detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
-    storageArea: resolveStorageBackend() === 'chrome.storage.local' ? 'local' : 'localStorage',
-    backend: resolveStorageBackend(),
+    storageArea: backend === 'chrome.storage.local' ? 'local' : 'localStorage',
+    backend,
   };
 }
 

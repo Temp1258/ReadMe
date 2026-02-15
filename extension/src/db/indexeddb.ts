@@ -18,7 +18,7 @@ export type SessionRecord = {
   segments: SessionSegment[];
 };
 
-const DB_NAME = 'ticnote';
+const SESSION_DB_NAME = 'ticnote';
 const STORE_NAME = 'sessions';
 const DB_VERSION = 1;
 
@@ -30,7 +30,7 @@ function openDb(): Promise<IDBDatabase> {
   }
 
   dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(SESSION_DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -61,7 +61,7 @@ async function putSession(session: SessionRecord): Promise<void> {
   await transactionDone(tx);
 }
 
-export async function getSession(id: string): Promise<SessionRecord | null> {
+async function getSession(id: string): Promise<SessionRecord | null> {
   const db = await openDb();
 
   return new Promise((resolve, reject) => {
