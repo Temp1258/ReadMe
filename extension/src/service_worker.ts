@@ -1,6 +1,5 @@
 import {
   SETTINGS_STORAGE_KEY,
-  getOpenAISttApiKey,
   type SttDetectedFrom,
   type SttProvider,
 } from './settings';
@@ -64,12 +63,11 @@ function parseSttFromItems(items: Record<string, unknown>): {
   const nestedProvider = settings?.stt?.provider;
   const configuredProvider: SttProvider = nestedProvider === 'openai' || nestedProvider === 'openaiWhisper' ? 'openai' : 'mock';
 
-  const keyLookup = getOpenAISttApiKey({ settings, topLevel: items });
-  const detectedFrom = keyLookup.detectedFrom;
-  const apiKey = keyLookup.apiKey ?? '';
-
-  const provider: SttProvider = apiKey ? 'openai' : configuredProvider;
-  const keyPresent = provider === 'openai' && Boolean(apiKey);
+  const canonicalApiKey = typeof settings?.stt?.apiKey === 'string' ? settings.stt.apiKey : '';
+  const apiKey = canonicalApiKey.trim();
+  const keyPresent = apiKey.length > 0;
+  const detectedFrom: SttDetectedFrom = keyPresent ? 'settings.stt.apiKey' : 'none';
+  const provider: SttProvider = configuredProvider;
 
   return {
     provider,
@@ -105,11 +103,11 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
   let lastSuccessfulBackend: Exclude<SttBackend, 'none'> = candidates[0].backend;
 
   for (const candidate of candidates) {
-    const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY, 'sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey']);
+    const items = await storageGet(candidate.area, [SETTINGS_STORAGE_KEY]);
     lastSuccessfulBackend = candidate.backend;
     const parsed = parseSttFromItems(items);
 
-    if (parsed.detectedFrom !== 'none' || parsed.provider === 'openai') {
+    if (parsed.provider === 'openai' || parsed.keyPresent) {
       return {
         ok: true,
         provider: parsed.provider,
