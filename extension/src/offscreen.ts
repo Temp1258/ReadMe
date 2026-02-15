@@ -1,5 +1,7 @@
 import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
-import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
+import { getActiveProvider } from './providers';
+import { getSttProvider } from './settings';
+import { WhisperApiError } from './stt/whisper';
 
 export {};
 
@@ -37,10 +39,6 @@ type GetSttSettingsResponse =
 
 const CHUNK_TIMESLICE_MS = 12_000;
 const CHUNK_MIN_BYTES = 1_024;
-const TRANSCRIBE_MAX_RETRIES = 3;
-const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
-
-let inMemoryApiKey: string | null = null;
 
 const state = {
   status: 'Idle' as AudioStatus,
@@ -65,22 +63,16 @@ async function refreshSttRuntimeSettings(): Promise<void> {
 
   if (!response?.ok) {
     const message = response?.error ?? 'Unable to fetch STT settings';
-    inMemoryApiKey = null;
     state.useMockTranscription = true;
     console.warn(`STT: settings unavailable backend=none error=${message}`);
     return;
   }
 
+  const providerId = await getSttProvider();
   const apiKey = response.apiKey?.trim() ?? '';
-  const provider = response.provider === 'openai' && apiKey ? 'openai' : 'mock';
+  state.useMockTranscription = providerId === 'openai' && !(response.provider === 'openai' && apiKey);
 
-  inMemoryApiKey = provider === 'openai' ? apiKey : null;
-  state.useMockTranscription = provider === 'mock';
-
-  console.info(
-    `STT: backend=${response.backend} provider=${provider} keyPresent=${response.keyPresent} last4=${response.last4 ?? 'n/a'} detectedFrom=${response.detectedFrom ?? 'none'}`,
-  );
-  console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
+  console.info(`STT: backend=${response.backend} provider=${providerId}`);
 }
 
 function toPersistedStatus(status: AudioStatus): PersistedStatus {
@@ -164,24 +156,6 @@ async function stopTracks(): Promise<void> {
   state.activeStream = null;
 }
 
-function getChunkFilename(seq: number, mimeType: string): string {
-  const normalizedMimeType = mimeType.toLowerCase();
-
-  if (normalizedMimeType.includes('webm')) {
-    return `chunk-${seq}.webm`;
-  }
-
-  if (normalizedMimeType.includes('wav')) {
-    return `chunk-${seq}.wav`;
-  }
-
-  if (normalizedMimeType.includes('mp4') || normalizedMimeType.includes('m4a')) {
-    return `chunk-${seq}.m4a`;
-  }
-
-  return `chunk-${seq}.webm`;
-}
-
 function chooseRecorderMimeType(): string | undefined {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm'];
 
@@ -218,8 +192,6 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
 }
 
 async function transcribeFullRecording(blob: Blob): Promise<void> {
-  const apiKey = inMemoryApiKey;
-
   const uploadSeq = 1;
 
   if (blob.size === 0) {
@@ -232,62 +204,28 @@ async function transcribeFullRecording(blob: Blob): Promise<void> {
     return;
   }
 
-  const filename = getChunkFilename(uploadSeq, blob.type || '');
-
-  if (!apiKey) {
+  if (state.useMockTranscription) {
     await appendTranscript(uploadSeq, `[mock] chunk ${uploadSeq} text`);
     return;
   }
 
-  for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
-    try {
-      console.info(`STT: uploading full recording size=${blob.size} type=${blob.type || 'unknown'} filename=${filename}`);
-      console.info(
-        `STT: preparing chunk ${uploadSeq} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
-      );
-      const text = await transcribeAudioBlob(blob, {
-        apiKey,
-        model: 'whisper-1',
-        fileName: filename,
-        maxRetries: 1,
-      });
+  try {
+    const provider = await getActiveProvider();
+    console.log(`[stt] provider=${provider.id}`);
+    const result = await provider.transcribe(blob);
+    await appendTranscript(uploadSeq, result.text || `[empty] chunk ${uploadSeq}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = error instanceof WhisperApiError ? error.status : 'unknown';
 
-      console.info(`STT: received response for chunk ${uploadSeq}`);
-      await appendTranscript(uploadSeq, text || `[empty] chunk ${uploadSeq}`);
+    if (error instanceof WhisperApiError && error.status === 400 && error.apiMessage.toLowerCase().includes('invalid file format')) {
+      await appendTranscript(uploadSeq, `[skipped] chunk ${uploadSeq} invalid file format`);
       return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const status = error instanceof WhisperApiError ? error.status : 'unknown';
-      const apiMessage = error instanceof WhisperApiError ? error.apiMessage : message;
-      console.error(
-        `STT: error for chunk ${uploadSeq} status=${status} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
-        apiMessage,
-      );
-
-      if (
-        error instanceof WhisperApiError &&
-        error.status === 400 &&
-        error.apiMessage.toLowerCase().includes('invalid file format')
-      ) {
-        await appendTranscript(uploadSeq, `[skipped] chunk ${uploadSeq} invalid file format`);
-        return;
-      }
-
-      if (error instanceof WhisperApiError && error.status !== 429 && error.status < 500) {
-        await appendTranscript(uploadSeq, `[failed] chunk ${uploadSeq} status ${error.status}`);
-        publishError(`Chunk ${uploadSeq} failed with status ${error.status}.`);
-        return;
-      }
-
-      if (attempt >= TRANSCRIBE_MAX_RETRIES) {
-        await appendTranscript(uploadSeq, `[failed] chunk ${uploadSeq} after ${TRANSCRIBE_MAX_RETRIES} attempts`);
-        publishError(`Chunk ${uploadSeq} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
-        return;
-      }
-
-      const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
-      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
     }
+
+    console.error(`STT: transcription failed status=${status}`);
+    await appendTranscript(uploadSeq, `[failed] chunk ${uploadSeq}`);
+    publishError(message);
   }
 }
 
@@ -338,7 +276,6 @@ async function stopRecording(): Promise<void> {
 
   await stopTracks();
   state.useMockTranscription = false;
-  inMemoryApiKey = null;
 
   if (state.activeSessionId) {
     void updateSessionState(state.activeSessionId, {

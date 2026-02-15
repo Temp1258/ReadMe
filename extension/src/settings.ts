@@ -1,5 +1,6 @@
 export type DefaultSource = 'microphone' | 'tab' | 'mix';
 export type SttProvider = 'mock' | 'openai';
+export type SttProviderId = 'openai' | 'aliyun' | 'tencent';
 export type StorageAreaName = 'local' | 'sync' | 'localStorage' | 'none';
 export type StorageBackendName = 'chrome.storage.local' | 'chrome.storage.sync' | 'localStorage';
 export type SttDetectedFrom =
@@ -48,6 +49,12 @@ export type SttCredentialSummary = {
 };
 
 export const SETTINGS_STORAGE_KEY = 'settings';
+const STT_PROVIDER_STORAGE_KEY = 'sttProvider';
+const ALIYUN_APP_KEY_STORAGE_KEY = 'aliyunAppKey';
+const ALIYUN_TOKEN_STORAGE_KEY = 'aliyunToken';
+const TENCENT_SECRET_ID_STORAGE_KEY = 'tencentSecretId';
+const TENCENT_SECRET_KEY_STORAGE_KEY = 'tencentSecretKey';
+const TENCENT_REGION_STORAGE_KEY = 'tencentRegion';
 const LEGACY_STT_KEYS = ['sttApiKey', 'sttapikey', 'whisperApiKey', 'openaiApiKey', 'apiKey', 'apikey'] as const;
 
 export const defaults: ExtensionSettings = {
@@ -124,6 +131,46 @@ async function storageRemove(storage: chrome.storage.StorageArea, keys: string[]
   await new Promise<void>((resolve) => {
     storage.remove(keys, () => resolve());
   });
+}
+
+function normalizeSttProvider(provider: unknown): SttProviderId {
+  return provider === 'aliyun' || provider === 'tencent' || provider === 'openai' ? provider : 'openai';
+}
+
+function normalizeTencentRegion(region: unknown): string {
+  const value = typeof region === 'string' ? region.trim() : '';
+  return value || 'ap-shanghai';
+}
+
+async function getStorageValue<T>(key: string, fallback: T): Promise<T> {
+  const backend = resolveStorageBackend();
+  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
+    const storage = getAreaByBackend('chrome.storage.local', getStorageAreas()) ?? getAreaByBackend(backend, getStorageAreas());
+    if (!storage) {
+      return fallback;
+    }
+
+    const items = await storageGet(storage, [key]);
+    return (items[key] as T | undefined) ?? fallback;
+  }
+
+  const raw = window.localStorage.getItem(key);
+  return raw !== null ? (raw as unknown as T) : fallback;
+}
+
+async function setStorageValues(payload: Record<string, string>): Promise<void> {
+  const backend = resolveStorageBackend();
+  if (backend === 'chrome.storage.local' || backend === 'chrome.storage.sync') {
+    const storage = getAreaByBackend('chrome.storage.local', getStorageAreas()) ?? getAreaByBackend(backend, getStorageAreas());
+    if (!storage) {
+      return;
+    }
+
+    await storageSet(storage, payload);
+    return;
+  }
+
+  Object.entries(payload).forEach(([key, value]) => window.localStorage.setItem(key, value));
 }
 
 function normalizeSettings(settings: LegacySettings): ExtensionSettings {
@@ -361,4 +408,54 @@ export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
     backend: stt.backend,
     detectedFrom: stt.detectedFrom,
   };
+}
+
+export async function getSttProvider(): Promise<SttProviderId> {
+  const provider = await getStorageValue<string>(STT_PROVIDER_STORAGE_KEY, 'openai');
+  return normalizeSttProvider(provider);
+}
+
+export async function setSttProvider(providerId: SttProviderId): Promise<void> {
+  await setStorageValues({ [STT_PROVIDER_STORAGE_KEY]: normalizeSttProvider(providerId) });
+}
+
+export async function getAliyunCreds(): Promise<{ appKey: string; token: string }> {
+  const [appKey, token] = await Promise.all([
+    getStorageValue<string>(ALIYUN_APP_KEY_STORAGE_KEY, ''),
+    getStorageValue<string>(ALIYUN_TOKEN_STORAGE_KEY, ''),
+  ]);
+
+  return {
+    appKey: appKey.trim(),
+    token: token.trim(),
+  };
+}
+
+export async function setAliyunCreds(creds: { appKey: string; token: string }): Promise<void> {
+  await setStorageValues({
+    [ALIYUN_APP_KEY_STORAGE_KEY]: creds.appKey.trim(),
+    [ALIYUN_TOKEN_STORAGE_KEY]: creds.token.trim(),
+  });
+}
+
+export async function getTencentCreds(): Promise<{ secretId: string; secretKey: string; region: string }> {
+  const [secretId, secretKey, region] = await Promise.all([
+    getStorageValue<string>(TENCENT_SECRET_ID_STORAGE_KEY, ''),
+    getStorageValue<string>(TENCENT_SECRET_KEY_STORAGE_KEY, ''),
+    getStorageValue<string>(TENCENT_REGION_STORAGE_KEY, 'ap-shanghai'),
+  ]);
+
+  return {
+    secretId: secretId.trim(),
+    secretKey: secretKey.trim(),
+    region: normalizeTencentRegion(region),
+  };
+}
+
+export async function setTencentCreds(creds: { secretId: string; secretKey: string; region: string }): Promise<void> {
+  await setStorageValues({
+    [TENCENT_SECRET_ID_STORAGE_KEY]: creds.secretId.trim(),
+    [TENCENT_SECRET_KEY_STORAGE_KEY]: creds.secretKey.trim(),
+    [TENCENT_REGION_STORAGE_KEY]: normalizeTencentRegion(creds.region),
+  });
 }

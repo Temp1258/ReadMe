@@ -1,6 +1,15 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
-import { loadSettings } from './settings';
+import {
+  getAliyunCreds,
+  getSttProvider,
+  getTencentCreds,
+  loadSettings,
+  setAliyunCreds,
+  setSttProvider,
+  setTencentCreds,
+  type SttProviderId,
+} from './settings';
 
 type AuthState = {
   token: string;
@@ -299,6 +308,18 @@ const UI_COPY = {
     providerSection: 'Provider',
     providerStatus: 'Provider status',
     manageApi: 'Manage API key',
+    sttProvider: 'STT Provider',
+    providerOpenai: 'OpenAI Whisper',
+    providerAliyun: 'Aliyun STT',
+    providerTencent: 'Tencent STT',
+    appKey: 'AppKey',
+    token: 'Token',
+    secretId: 'SecretId',
+    secretKey: 'SecretKey',
+    region: 'Region',
+    configured: 'Configured',
+    missing: 'Missing',
+    save: 'Save',
     privacy: 'Privacy',
     privacySummary: 'How cloud transcription works',
     privacyBody:
@@ -359,6 +380,18 @@ const UI_COPY = {
     providerSection: '服务提供商',
     providerStatus: '服务状态',
     manageApi: '管理 API Key',
+    sttProvider: '语音转写提供商',
+    providerOpenai: 'OpenAI Whisper',
+    providerAliyun: '阿里云语音识别',
+    providerTencent: '腾讯云语音识别',
+    appKey: 'AppKey',
+    token: 'Token',
+    secretId: 'SecretId',
+    secretKey: 'SecretKey',
+    region: '地域',
+    configured: '已配置',
+    missing: '未配置',
+    save: '保存',
     privacy: '隐私',
     privacySummary: '云端转录说明',
     privacyBody: '配置 API Key 后，录制音频可能会发送到云端转录 API 进行处理。你可以通过本地设置和服务配置控制该行为。',
@@ -544,25 +577,41 @@ async function persistUILang(lang: UILang): Promise<void> {
 
 
 async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: string; configurationLabel: string; error?: string }> {
-  const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
-
-  if (!sendMessage) {
-    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: 'Runtime messaging unavailable.' };
-  }
-
   try {
-    const response = await sendMessage({ type: 'GET_STT_SETTINGS' });
-    if (!response.ok) {
-      return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: response.error || 'Unable to read STT settings.' };
+    const provider = await getSttProvider();
+    if (provider === 'aliyun') {
+      const creds = await getAliyunCreds();
+      return {
+        providerLabel: 'Aliyun STT',
+        configurationLabel: creds.appKey && creds.token ? 'Configured' : 'Missing',
+      };
     }
 
-    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : 'Mock';
-    const configurationLabel = response.provider === 'openai' && response.keyPresent ? 'Configured' : 'Not configured';
+    if (provider === 'tencent') {
+      const creds = await getTencentCreds();
+      return {
+        providerLabel: 'Tencent STT',
+        configurationLabel: creds.secretId && creds.secretKey ? 'Configured' : 'Missing',
+      };
+    }
 
-    return { providerLabel, configurationLabel };
+    const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
+    if (!sendMessage) {
+      return { providerLabel: 'OpenAI Whisper', configurationLabel: 'Missing', error: 'Runtime messaging unavailable.' };
+    }
+
+    const response = await sendMessage({ type: 'GET_STT_SETTINGS' });
+    if (!response.ok) {
+      return { providerLabel: 'OpenAI Whisper', configurationLabel: 'Missing', error: response.error || 'Unable to read STT settings.' };
+    }
+
+    return {
+      providerLabel: 'OpenAI Whisper',
+      configurationLabel: response.provider === 'openai' && response.keyPresent ? 'Configured' : 'Missing',
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to read STT settings.';
-    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: message };
+    return { providerLabel: 'Unknown', configurationLabel: 'Missing', error: message };
   }
 }
 
@@ -598,6 +647,16 @@ function App() {
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
   const [transcriptText, setTranscriptText] = useState('');
   const [sttStatusLine, setSttStatusLine] = useState('Provider: Unknown · Not configured');
+  const [sttProvider, setSttProviderState] = useState<SttProviderId>('openai');
+  const [aliyunAppKey, setAliyunAppKey] = useState('');
+  const [aliyunToken, setAliyunToken] = useState('');
+  const [tencentSecretId, setTencentSecretId] = useState('');
+  const [tencentSecretKey, setTencentSecretKey] = useState('');
+  const [tencentRegion, setTencentRegion] = useState('ap-shanghai');
+  const [showAliyunToken, setShowAliyunToken] = useState(false);
+  const [showTencentSecretId, setShowTencentSecretId] = useState(false);
+  const [showTencentSecretKey, setShowTencentSecretKey] = useState(false);
+  const [providerSaveMessage, setProviderSaveMessage] = useState<string | null>(null);
   const [notesSessions, setNotesSessions] = useState<SessionRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -650,17 +709,29 @@ function App() {
       }
     });
 
-    Promise.all([loadSettings(), getSttDiagnosticsFromRuntime(), readUITheme(), readUILang()]).then(
-      ([settings, sttSummary, savedTheme, savedLang]) => {
-        setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
-        if (sttSummary.error) {
-          setError(sttSummary.error);
-        }
-        setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
-        setUITheme(savedTheme);
-        setUILang(savedLang);
-      },
-    );
+    Promise.all([
+      loadSettings(),
+      getSttDiagnosticsFromRuntime(),
+      readUITheme(),
+      readUILang(),
+      getSttProvider(),
+      getAliyunCreds(),
+      getTencentCreds(),
+    ]).then(([settings, sttSummary, savedTheme, savedLang, provider, aliyunCreds, tencentCreds]) => {
+      setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
+      if (sttSummary.error) {
+        setError(sttSummary.error);
+      }
+      setSelectedSource(settingsSourceToAudioSource(settings.defaultSource));
+      setUITheme(savedTheme);
+      setUILang(savedLang);
+      setSttProviderState(provider);
+      setAliyunAppKey(aliyunCreds.appKey);
+      setAliyunToken(aliyunCreds.token);
+      setTencentSecretId(tencentCreds.secretId);
+      setTencentSecretKey(tencentCreds.secretKey);
+      setTencentRegion(tencentCreds.region);
+    });
   }, []);
 
   useEffect(() => {
@@ -1038,6 +1109,57 @@ function App() {
     window.open(chrome.runtime.getURL('options.html'), '_blank');
   };
 
+  const providerConfigured =
+    sttProvider === 'openai'
+      ? sttStatusLine.toLowerCase().includes('configured')
+      : sttProvider === 'aliyun'
+        ? Boolean(aliyunAppKey.trim() && aliyunToken.trim())
+        : Boolean(tencentSecretId.trim() && tencentSecretKey.trim() && tencentRegion.trim());
+
+  const handleProviderChange = async (provider: SttProviderId) => {
+    setProviderSaveMessage(null);
+    setSttProviderState(provider);
+    await setSttProvider(provider);
+    setSttStatusLine(`Provider: ${provider} · ${providerConfigured ? t('configured') : t('missing')}`);
+    await ensureOffscreenDocument();
+    await sendControlMessage({ type: 'REFRESH_SETTINGS' });
+  };
+
+  const handleSaveProviderCredentials = async () => {
+    setError(null);
+    setProviderSaveMessage(null);
+
+    try {
+      if (sttProvider === 'aliyun') {
+        await setAliyunCreds({ appKey: aliyunAppKey, token: aliyunToken });
+      }
+
+      if (sttProvider === 'tencent') {
+        await setTencentCreds({ secretId: tencentSecretId, secretKey: tencentSecretKey, region: tencentRegion });
+      }
+
+      setProviderSaveMessage(t('save'));
+      await ensureOffscreenDocument();
+      await sendControlMessage({ type: 'REFRESH_SETTINGS' });
+    } catch (providerSaveError) {
+      const message = providerSaveError instanceof Error ? providerSaveError.message : 'Unable to save provider credentials.';
+      setError(message);
+    }
+  };
+
+  const handleToggleSecret = (field: 'aliyunToken' | 'tencentSecretId' | 'tencentSecretKey') => {
+    if (field === 'aliyunToken') {
+      setShowAliyunToken((current) => !current);
+      return;
+    }
+
+    if (field === 'tencentSecretId') {
+      setShowTencentSecretId((current) => !current);
+      return;
+    }
+
+    setShowTencentSecretKey((current) => !current);
+  };
 
   const handleThemeChange = async (theme: UITheme) => {
     setUITheme(theme);
@@ -1379,10 +1501,85 @@ function App() {
 
             <div className="settings-card">
               <h2>{t('providerSection')}</h2>
-              <p className="panel__body">{t('providerStatus')}: {sttStatusLine}</p>
-              <button className="button button--tertiary settings-link" onClick={() => void handleOpenSettings()} type="button">
-                {t('manageApi')}
-              </button>
+              <p className="panel__body">{t('providerStatus')}: {providerConfigured ? t('configured') : t('missing')}</p>
+              <label className="form__label" htmlFor="stt-provider-select">{t('sttProvider')}</label>
+              <select
+                className="form__input"
+                id="stt-provider-select"
+                value={sttProvider}
+                onChange={(event) => void handleProviderChange(event.target.value as SttProviderId)}
+              >
+                <option value="openai">{t('providerOpenai')}</option>
+                <option value="aliyun">{t('providerAliyun')}</option>
+                <option value="tencent">{t('providerTencent')}</option>
+              </select>
+
+              {sttProvider === 'openai' ? (
+                <button className="button button--tertiary settings-link" onClick={() => void handleOpenSettings()} type="button">
+                  {t('manageApi')}
+                </button>
+              ) : null}
+
+              {sttProvider === 'aliyun' ? (
+                <>
+                  <label className="form__label" htmlFor="aliyun-appkey">{t('appKey')}</label>
+                  <input id="aliyun-appkey" className="form__input" value={aliyunAppKey} onChange={(event) => setAliyunAppKey(event.target.value)} />
+                  <label className="form__label" htmlFor="aliyun-token">{t('token')}</label>
+                  <div className="inline-actions">
+                    <input
+                      id="aliyun-token"
+                      className="form__input"
+                      type={showAliyunToken ? 'text' : 'password'}
+                      value={aliyunToken}
+                      onChange={(event) => setAliyunToken(event.target.value)}
+                    />
+                    <button className="button button--secondary" type="button" onClick={() => handleToggleSecret('aliyunToken')}>
+                      {showAliyunToken ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+
+              {sttProvider === 'tencent' ? (
+                <>
+                  <label className="form__label" htmlFor="tencent-secret-id">{t('secretId')}</label>
+                  <div className="inline-actions">
+                    <input
+                      id="tencent-secret-id"
+                      className="form__input"
+                      type={showTencentSecretId ? 'text' : 'password'}
+                      value={tencentSecretId}
+                      onChange={(event) => setTencentSecretId(event.target.value)}
+                    />
+                    <button className="button button--secondary" type="button" onClick={() => handleToggleSecret('tencentSecretId')}>
+                      {showTencentSecretId ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <label className="form__label" htmlFor="tencent-secret-key">{t('secretKey')}</label>
+                  <div className="inline-actions">
+                    <input
+                      id="tencent-secret-key"
+                      className="form__input"
+                      type={showTencentSecretKey ? 'text' : 'password'}
+                      value={tencentSecretKey}
+                      onChange={(event) => setTencentSecretKey(event.target.value)}
+                    />
+                    <button className="button button--secondary" type="button" onClick={() => handleToggleSecret('tencentSecretKey')}>
+                      {showTencentSecretKey ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <label className="form__label" htmlFor="tencent-region">{t('region')}</label>
+                  <select id="tencent-region" className="form__input" value={tencentRegion} onChange={(event) => setTencentRegion(event.target.value)}>
+                    <option value="ap-shanghai">ap-shanghai</option>
+                    <option value="ap-guangzhou">ap-guangzhou</option>
+                  </select>
+                </>
+              ) : null}
+
+              {sttProvider !== 'openai' ? (
+                <button className="button" type="button" onClick={() => void handleSaveProviderCredentials()}>{t('save')}</button>
+              ) : null}
+              {providerSaveMessage ? <p className="success">{providerSaveMessage}</p> : null}
             </div>
 
             <details className="settings-card">
