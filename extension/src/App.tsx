@@ -32,7 +32,6 @@ type GetSttSettingsResponse =
   | {
       ok: true;
       provider: 'openai' | 'mock';
-      apiKey?: string | null;
       keyPresent: boolean;
       last4?: string | null;
       detectedFrom?: string | null;
