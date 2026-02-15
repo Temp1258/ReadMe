@@ -91,13 +91,6 @@ function formatDuration(startedAt: number, endedAt?: number): string | null {
   return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
 }
 
-function formatSegmentOffset(startedAt: number, timestamp: number): string {
-  const offsetSeconds = Math.max(0, Math.floor((timestamp - startedAt) / 1000));
-  const minutes = Math.floor(offsetSeconds / 60);
-  const seconds = offsetSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
 function formatFileTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
   const year = date.getFullYear();
@@ -1315,42 +1308,23 @@ function App() {
                 ) : (
                   <>
                     <div className="notes-detail__header">
-                      <h3>{t('transcriptTitle')}</h3>
-                      <div className="notes-detail__export-group" aria-label={t('export')}>
-                        <span className="notes-detail__export-label">{t('export')}</span>
-                        <div className="notes-detail__actions">
-                          <button className="button button--tertiary button--compact" onClick={() => handleExportSession('txt')} type="button">
-                            {t('exportTxt')}
-                          </button>
-                          <button className="button button--tertiary button--compact" onClick={() => handleExportSession('md')} type="button">
-                            {t('exportMd')}
-                          </button>
-                        </div>
+                      <h3 className="notes-detail__title">{t('transcriptTitle')}</h3>
+                      <div className="notes-detail__actions" aria-label={t('export')}>
+                        <button className="button button--secondary button--mini" onClick={() => handleExportSession('txt')} type="button">
+                          TXT
+                        </button>
+                        <button className="button button--secondary button--mini" onClick={() => handleExportSession('md')} type="button">
+                          MD
+                        </button>
                       </div>
                     </div>
-                    <div className="transcript">
+                    <div className="transcript notes-detail__transcript">
                       {selectedSession.transcript ? (
                         <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
                       ) : (
                         <p className="transcript__line transcript__line--muted">{t('noTranscriptYet')}</p>
                       )}
                     </div>
-
-                    <h3>{t('segments')}</h3>
-                    {selectedSession.segments.length === 0 ? (
-                      <p className="panel__body">{t('noSegments')}</p>
-                    ) : (
-                      <ul className="notes-segments">
-                        {selectedSession.segments.map((segment) => (
-                          <li key={segment.idx}>
-                            <span className="notes-segments__meta">
-                              #{segment.idx} • {formatSegmentOffset(selectedSession.startedAt, segment.ts)}
-                            </span>{' '}
-                            {segment.text}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
                   </>
                 )}
               </div>
