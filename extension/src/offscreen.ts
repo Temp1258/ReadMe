@@ -8,7 +8,6 @@ type PersistedStatus = 'idle' | 'listening' | 'transcribing' | 'stopped' | 'erro
 type AudioSource = 'mic' | 'tab' | 'mix';
 
 type RuntimeMessage =
-  | { type: 'PING' }
   | { type: 'GET_AUDIO_STATE' }
   | {
       type: 'START_RECORDING';
@@ -518,11 +517,6 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 
 chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendResponse) => {
   const message = rawMessage;
-
-  if (message?.type === 'PING') {
-    sendResponse({ type: 'PONG' });
-    return;
-  }
 
   if (message?.type === 'GET_AUDIO_STATE') {
     sendResponse({
