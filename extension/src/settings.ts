@@ -136,17 +136,54 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
 }
 
 export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
-  const settings = await loadSettings();
+  let backend: StorageBackendName;
+  try {
+    backend = resolveStorageBackend();
+  } catch (e) {
+    console.error('[loadSttSettings] resolveStorageBackend failed:', e);
+    const settings = cloneDefaults();
+    const apiKey = trimApiKey(settings.stt.apiKey);
+    const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
+
+    return {
+      provider,
+      ...(provider === 'openai' ? { apiKey } : {}),
+      detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
+      storageArea: 'local',
+      backend: 'chrome.storage.local',
+    };
+  }
+
+  if (backend !== 'chrome.storage.local') {
+    const settings = cloneDefaults();
+    const apiKey = trimApiKey(settings.stt.apiKey);
+    const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
+
+    return {
+      provider,
+      ...(provider === 'openai' ? { apiKey } : {}),
+      detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
+      storageArea: 'local',
+      backend: 'chrome.storage.local',
+    };
+  }
+
+  let settings: ExtensionSettings;
+  try {
+    settings = await loadSettings();
+  } catch {
+    settings = cloneDefaults();
+  }
+
   const apiKey = trimApiKey(settings.stt.apiKey);
   const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
-  const backend = resolveStorageBackend();
 
   return {
     provider,
     ...(provider === 'openai' ? { apiKey } : {}),
     detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
-    storageArea: backend === 'chrome.storage.local' ? 'local' : 'localStorage',
-    backend,
+    storageArea: 'local',
+    backend: 'chrome.storage.local',
   };
 }
 
