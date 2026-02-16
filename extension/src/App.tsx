@@ -378,14 +378,62 @@ function getStorageArea(): ChromeStorageArea | null {
 async function readAuthState(): Promise<AuthState | null> {
   const storage = getStorageArea();
 
+  let localData: string | null = null;
+  try {
+    localData = window.localStorage.getItem(AUTH_STORAGE_KEY);
+  } catch {
+    localData = null;
+  }
+
   if (!storage) {
-    const localData = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    return localData ? (JSON.parse(localData) as AuthState) : null;
+    if (!localData) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(localData) as AuthState;
+    } catch {
+      return null;
+    }
   }
 
   return new Promise((resolve) => {
     storage.get(AUTH_STORAGE_KEY, (items) => {
-      resolve((items[AUTH_STORAGE_KEY] as AuthState | undefined) ?? null);
+      const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
+      if (runtimeError) {
+        resolve(null);
+        return;
+      }
+
+      const storedAuth = (items[AUTH_STORAGE_KEY] as AuthState | undefined) ?? null;
+      if (storedAuth || !localData) {
+        resolve(storedAuth);
+        return;
+      }
+
+      let parsedLocalAuth: AuthState;
+      try {
+        parsedLocalAuth = JSON.parse(localData) as AuthState;
+      } catch {
+        resolve(null);
+        return;
+      }
+
+      storage.set({ [AUTH_STORAGE_KEY]: parsedLocalAuth }, () => {
+        const setRuntimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
+        if (setRuntimeError) {
+          resolve(parsedLocalAuth);
+          return;
+        }
+
+        try {
+          window.localStorage.removeItem(AUTH_STORAGE_KEY);
+        } catch {
+          // no-op: migration cleanup is best effort.
+        }
+
+        resolve(parsedLocalAuth);
+      });
     });
   });
 }
@@ -394,12 +442,23 @@ async function persistAuthState(auth: AuthState): Promise<void> {
   const storage = getStorageArea();
 
   if (!storage) {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
     return;
   }
 
   await new Promise<void>((resolve) => {
-    storage.set({ [AUTH_STORAGE_KEY]: auth }, () => resolve());
+    try {
+      storage.set({ [AUTH_STORAGE_KEY]: auth }, () => {
+        const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
+        if (runtimeError) {
+          console.error('Failed to persist auth state:', runtimeError.message);
+        }
+
+        resolve();
+      });
+    } catch (error) {
+      console.error('Failed to persist auth state:', error);
+      resolve();
+    }
   });
 }
 
@@ -407,12 +466,23 @@ async function clearAuthState(): Promise<void> {
   const storage = getStorageArea();
 
   if (!storage) {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
     return;
   }
 
   await new Promise<void>((resolve) => {
-    storage.remove(AUTH_STORAGE_KEY, () => resolve());
+    try {
+      storage.remove(AUTH_STORAGE_KEY, () => {
+        const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
+        if (runtimeError) {
+          console.error('Failed to clear auth state:', runtimeError.message);
+        }
+
+        resolve();
+      });
+    } catch (error) {
+      console.error('Failed to clear auth state:', error);
+      resolve();
+    }
   });
 }
 
