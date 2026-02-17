@@ -119,6 +119,7 @@ function OptionsPage() {
   const handleClearTencentInput = () => {
     if (!window.confirm('Clear Tencent API key input?')) return;
     setTencentApiKeyInput('');
+    setStatusMessage('Inputs cleared.');
   };
 
   const keySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
