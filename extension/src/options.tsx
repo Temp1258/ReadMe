@@ -30,6 +30,7 @@ function parseDefaultSourceInput(source: string): DefaultSource {
 
 function OptionsPage() {
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [tencentApiKeyInput, setTencentApiKeyInput] = useState('');
   const [storedApiKey, setStoredApiKey] = useState('');
   const [defaultSource, setDefaultSource] = useState<DefaultSource>(defaults.defaultSource);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -115,6 +116,12 @@ function OptionsPage() {
     }
   };
 
+  const handleClearTencentInput = () => {
+    if (!window.confirm('Clear Tencent API key input?')) return;
+    setTencentApiKeyInput('');
+    setStatusMessage('Inputs cleared.');
+  };
+
   const keySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
 
   return (
@@ -141,6 +148,21 @@ function OptionsPage() {
             type="password"
             value={apiKeyInput}
           />
+
+          <label className="form__label" htmlFor="tencent-api-key">
+            Tencent API Key input (not saved)
+          </label>
+          <input
+            className="form__input"
+            id="tencent-api-key"
+            onChange={(event) => setTencentApiKeyInput(event.target.value)}
+            placeholder="Tencent key"
+            type="password"
+            value={tencentApiKeyInput}
+          />
+          <button className="button button--secondary" disabled={isSaving || !tencentApiKeyInput} onClick={handleClearTencentInput} type="button">
+            Clear Tencent input
+          </button>
 
           <label className="form__label" htmlFor="default-source">
             Default audio source
