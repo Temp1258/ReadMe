@@ -292,3 +292,44 @@ export async function listRecordingChunksBySession(sessionId: string): Promise<R
     };
   });
 }
+
+export async function streamRecordingChunksBySession(
+  sessionId: string,
+  onChunk: (chunk: RecordingChunkRecord) => Promise<void> | void,
+): Promise<void> {
+  const db = await openDb();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readonly');
+    const store = tx.objectStore(RECORDING_CHUNK_STORE_NAME);
+    const index = store.index(RECORDING_CHUNK_SESSION_SEQ_INDEX);
+    const range = IDBKeyRange.bound([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER]);
+    const request = index.openCursor(range, 'next');
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+
+      const chunk = cursor.value as RecordingChunkRecord;
+      Promise.resolve(onChunk(chunk))
+        .then(() => cursor.continue())
+        .catch((error) => {
+          tx.abort();
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+    };
+
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to stream recording chunks from IndexedDB.'));
+    };
+
+    tx.onabort = () => {
+      if (tx.error) {
+        reject(tx.error);
+      }
+    };
+  });
+}

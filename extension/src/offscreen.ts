@@ -3,8 +3,8 @@ import {
   appendSessionSegment,
   createRecordingSession,
   createSession,
-  listRecordingChunksBySession,
   type RecordingSessionRecord,
+  streamRecordingChunksBySession,
   updateRecordingSession,
   updateSessionState,
 } from './db/indexeddb';
@@ -61,6 +61,7 @@ type GetSttSettingsResponse =
 
 const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
+const MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -360,83 +361,132 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
   });
 }
 
-async function transcribeFullRecording(blob: Blob): Promise<void> {
+async function countEstimatedSegments(sessionId: string): Promise<number> {
+  let estimatedSegments = 0;
+  let runningBytes = 0;
+
+  await streamRecordingChunksBySession(sessionId, (chunk) => {
+    if (chunk.bytes > MAX_SEGMENT_BYTES) {
+      throw new Error(
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+      );
+    }
+
+    if (runningBytes > 0 && runningBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
+      estimatedSegments += 1;
+      runningBytes = 0;
+    }
+
+    runningBytes += chunk.bytes;
+  });
+
+  if (runningBytes > 0) {
+    estimatedSegments += 1;
+  }
+
+  return estimatedSegments;
+}
+
+function buildSegmentErrorMessage(segmentIndex: number, segmentBytes: number, error: WhisperApiError): string {
+  if (error.status === 413) {
+    return `Segment ${segmentIndex} failed with status 413. Segment size ${segmentBytes} bytes exceeds safe upload threshold ${MAX_SEGMENT_BYTES} bytes.`;
+  }
+
+  return `Segment ${segmentIndex} failed with status ${error.status}.`;
+}
+
+async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, totalSegments: number): Promise<void> {
   const apiKey = inMemoryApiKey;
 
-  const uploadSeq = 1;
-
-  if (blob.size === 0) {
-    console.info(`STT: chunk ${uploadSeq} skipped (empty) size=${blob.size} type=${blob.type || 'unknown'}`);
+  if (segmentBlob.size === 0 || segmentBlob.size < CHUNK_MIN_BYTES) {
     return;
   }
 
-  if (blob.size < CHUNK_MIN_BYTES) {
-    console.info(`STT: chunk ${uploadSeq} skipped (too-small) size=${blob.size} type=${blob.type || 'unknown'}`);
-    return;
-  }
-
-  const filename = getChunkFilename(uploadSeq, blob.type || '');
+  const segmentMB = segmentBlob.size / (1024 * 1024);
+  updateStatus('Transcribing', `Transcribing segment ${segmentIndex}/${totalSegments} (${segmentMB.toFixed(2)}MB)...`);
+  console.info(
+    `[transcribe-segment] sessionId=${state.recordingSession?.sessionId ?? 'unknown'} seg=${segmentIndex} bytes=${segmentBlob.size} mb=${segmentMB.toFixed(2)}`,
+  );
 
   if (state.useMockTranscription) {
-    await appendTranscript(uploadSeq, `[mock] chunk ${uploadSeq} text`);
+    await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`);
     return;
   }
 
   if (!apiKey) {
-    publishError('Missing OpenAI API key for REAL transcription mode.');
-    return;
+    throw new Error('Missing OpenAI API key for REAL transcription mode.');
   }
+
+  const filename = getChunkFilename(segmentIndex, segmentBlob.type || '');
 
   for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
     try {
-      console.info(`STT: uploading full recording size=${blob.size} type=${blob.type || 'unknown'} filename=${filename}`);
-      console.info(
-        `STT: preparing chunk ${uploadSeq} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
-      );
-      const text = await transcribeAudioBlob(blob, {
+      const text = await transcribeAudioBlob(segmentBlob, {
         apiKey,
         model: 'whisper-1',
         fileName: filename,
         maxRetries: 1,
       });
-
-      console.info(`STT: received response for chunk ${uploadSeq}`);
-      await appendTranscript(uploadSeq, text || `[empty] chunk ${uploadSeq}`);
+      await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`);
       return;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const status = error instanceof WhisperApiError ? error.status : 'unknown';
-      const apiMessage = error instanceof WhisperApiError ? error.apiMessage : message;
-      console.error(
-        `STT: error for chunk ${uploadSeq} status=${status} size=${blob.size} type=${blob.type || 'unknown'} filename=${filename} (attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES})`,
-        apiMessage,
-      );
-
       if (
         error instanceof WhisperApiError &&
         error.status === 400 &&
         error.apiMessage.toLowerCase().includes('invalid file format')
       ) {
-        await appendTranscript(uploadSeq, `[skipped] chunk ${uploadSeq} invalid file format`);
+        await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`);
         return;
       }
 
       if (error instanceof WhisperApiError && error.status !== 429 && error.status < 500) {
-        await appendTranscript(uploadSeq, `[failed] chunk ${uploadSeq} status ${error.status}`);
-        publishError(`Chunk ${uploadSeq} failed with status ${error.status}.`);
-        return;
+        throw new Error(buildSegmentErrorMessage(segmentIndex, segmentBlob.size, error));
       }
 
       if (attempt >= TRANSCRIBE_MAX_RETRIES) {
-        await appendTranscript(uploadSeq, `[failed] chunk ${uploadSeq} after ${TRANSCRIBE_MAX_RETRIES} attempts`);
-        publishError(`Chunk ${uploadSeq} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
-        return;
+        throw new Error(`Segment ${segmentIndex} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
       }
 
       const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
       await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
     }
   }
+}
+
+async function transcribeRecordingInSegments(recordingSession: RecordingSessionRecord, mimeType: string): Promise<void> {
+  const totalSegments = await countEstimatedSegments(recordingSession.sessionId);
+  let currentSegmentBlobs: Blob[] = [];
+  let currentSegmentBytes = 0;
+  let segmentIndex = 0;
+
+  const flushSegment = async (): Promise<void> => {
+    if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
+      return;
+    }
+
+    segmentIndex += 1;
+    const segmentBlob = new Blob(currentSegmentBlobs, { type: mimeType || 'audio/webm' });
+    currentSegmentBlobs = [];
+    currentSegmentBytes = 0;
+    await transcribeSegmentBlob(segmentBlob, segmentIndex, totalSegments);
+  };
+
+  await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
+    if (chunk.bytes > MAX_SEGMENT_BYTES) {
+      throw new Error(
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+      );
+    }
+
+    if (currentSegmentBytes > 0 && currentSegmentBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
+      await flushSegment();
+    }
+
+    currentSegmentBlobs.push(chunk.blob);
+    currentSegmentBytes += chunk.bytes;
+  });
+
+  await flushSegment();
 }
 
 async function stopRecording(): Promise<void> {
@@ -469,19 +519,17 @@ async function stopRecording(): Promise<void> {
 
   const recordingSession = state.recordingSession;
 
+  let transcriptionFailed = false;
+
   if (recordingSession && recordingSession.chunkCount > 0) {
     updateStatus('Transcribing', 'Transcribing recording...');
 
     try {
-      const persistedChunks = await listRecordingChunksBySession(recordingSession.sessionId);
-      const recorderMimeType = recorder?.mimeType || persistedChunks[0]?.mimeType || recordingSession.mimeType || 'audio/webm';
-      const fullBlob = new Blob(
-        persistedChunks.map((chunk) => chunk.blob),
-        { type: recorderMimeType || 'audio/webm' },
-      );
-      await transcribeFullRecording(fullBlob);
+      const recorderMimeType = recorder?.mimeType || recordingSession.mimeType || 'audio/webm';
+      await transcribeRecordingInSegments(recordingSession, recorderMimeType);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      transcriptionFailed = true;
       publishError(`Recording failed: ${message}`);
     }
   }
@@ -514,7 +562,7 @@ async function stopRecording(): Promise<void> {
   if (state.activeSessionId) {
     void updateSessionState(state.activeSessionId, {
       endedAt: Date.now(),
-      status: 'stopped',
+      status: transcriptionFailed ? 'error' : 'stopped',
     });
     state.activeSessionId = null;
   }
@@ -523,7 +571,9 @@ async function stopRecording(): Promise<void> {
   state.recordingSession = null;
   state.nextChunkSeq = 1;
 
-  updateStatus('Stopped', 'Stopped');
+  if (!transcriptionFailed && state.status !== 'Error') {
+    updateStatus('Stopped', 'Stopped');
+  }
 }
 
 async function getTabAudioStream(streamId: string): Promise<MediaStream> {
