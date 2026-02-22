@@ -1,4 +1,13 @@
-import { appendSessionSegment, createSession, updateSessionState } from './db/indexeddb';
+import {
+  appendRecordingChunk,
+  appendSessionSegment,
+  createRecordingSession,
+  createSession,
+  listRecordingChunksBySession,
+  type RecordingSessionRecord,
+  updateRecordingSession,
+  updateSessionState,
+} from './db/indexeddb';
 import { transcribeAudioBlob, WhisperApiError } from './stt/whisper';
 
 export {};
@@ -16,8 +25,27 @@ type RuntimeMessage =
   | { type: 'STOP_RECORDING' }
   | { type: 'REFRESH_SETTINGS' };
 
+type RecordingDiagnostics = {
+  durationSec: number;
+  durationLabel: string;
+  totalBytes: number;
+  totalMB: number;
+  mbPerMin: number;
+  estMinTo25MB: number | null;
+};
+
 type RuntimeEventMessage =
-  | { type: 'STATUS_UPDATE'; payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number } }
+  | {
+      type: 'STATUS_UPDATE';
+      payload: {
+        status: AudioStatus;
+        detail?: string;
+        selectedDeviceId: string;
+        selectedSource: AudioSource;
+        seq: number;
+        diagnostics: RecordingDiagnostics;
+      };
+    }
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | { type: 'ERROR'; payload: { message: string } };
 
@@ -31,7 +59,7 @@ type GetSttSettingsResponse =
     }
   | { ok: false; error: string };
 
-const CHUNK_TIMESLICE_MS = 12_000;
+const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
@@ -50,10 +78,12 @@ const state = {
   playbackContext: null as AudioContext | null,
   playbackSourceNode: null as MediaStreamAudioSourceNode | null,
   playbackDestinationNode: null as MediaStreamAudioDestinationNode | null,
-  chunks: [] as Blob[],
   transcript: '',
   activeSessionId: null as string | null,
   useMockTranscription: false,
+  recordingSession: null as RecordingSessionRecord | null,
+  nextChunkSeq: 1,
+  diagnosticsTimerId: null as number | null,
 };
 
 async function refreshSttRuntimeSettings(): Promise<void> {
@@ -106,6 +136,115 @@ function toPersistedStatus(status: AudioStatus): PersistedStatus {
   return 'idle';
 }
 
+
+function formatDurationLabel(durationSec: number): string {
+  const mins = Math.floor(durationSec / 60);
+  const secs = durationSec % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function computeDiagnostics(): RecordingDiagnostics {
+  const recordingSession = state.recordingSession;
+  if (!recordingSession) {
+    return {
+      durationSec: 0,
+      durationLabel: '00:00',
+      totalBytes: 0,
+      totalMB: 0,
+      mbPerMin: 0,
+      estMinTo25MB: null,
+    };
+  }
+
+  const endTime = recordingSession.stopTime ?? Date.now();
+  const durationSec = Math.max(0, Math.floor((endTime - recordingSession.startTime) / 1000));
+  const totalMB = recordingSession.totalBytes / (1024 * 1024);
+  const mbPerMin = durationSec > 0 ? (totalMB / durationSec) * 60 : 0;
+  const remainingMB = Math.max(0, 25 - totalMB);
+
+  return {
+    durationSec,
+    durationLabel: formatDurationLabel(durationSec),
+    totalBytes: recordingSession.totalBytes,
+    totalMB,
+    mbPerMin,
+    estMinTo25MB: mbPerMin > 0 ? remainingMB / mbPerMin : null,
+  };
+}
+
+function startDiagnosticsTimer(): void {
+  if (state.diagnosticsTimerId !== null) {
+    clearInterval(state.diagnosticsTimerId);
+  }
+
+  state.diagnosticsTimerId = window.setInterval(() => {
+    if (state.status === 'Listening') {
+      updateStatus(state.status, state.detail);
+    }
+  }, 1000);
+}
+
+function stopDiagnosticsTimer(): void {
+  if (state.diagnosticsTimerId !== null) {
+    clearInterval(state.diagnosticsTimerId);
+    state.diagnosticsTimerId = null;
+  }
+}
+
+async function setRecordingSessionError(sessionId: string): Promise<void> {
+  try {
+    const updated = await updateRecordingSession(sessionId, {
+      status: 'error',
+      stopTime: Date.now(),
+    });
+    if (updated) {
+      state.recordingSession = updated;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[recording-store] failed to set session error status sessionId=${sessionId} error=${message}`);
+  }
+}
+
+async function persistChunk(blob: Blob): Promise<void> {
+  const recordingSession = state.recordingSession;
+  if (!recordingSession) {
+    return;
+  }
+
+  const chunkSeq = state.nextChunkSeq;
+
+  try {
+    await appendRecordingChunk({
+      id: `${recordingSession.sessionId}:${chunkSeq}`,
+      sessionId: recordingSession.sessionId,
+      seq: chunkSeq,
+      createdAt: Date.now(),
+      bytes: blob.size,
+      mimeType: blob.type || recordingSession.mimeType || 'audio/webm',
+      blob,
+    });
+
+    const updated = await updateRecordingSession(recordingSession.sessionId, {
+      totalBytes: recordingSession.totalBytes + blob.size,
+      chunkCount: recordingSession.chunkCount + 1,
+    });
+
+    if (updated) {
+      state.recordingSession = updated;
+    }
+
+    state.nextChunkSeq += 1;
+    state.seq = chunkSeq;
+    updateStatus(state.status, state.detail);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[recording-store] failed to persist chunk sessionId=${recordingSession.sessionId} seq=${chunkSeq} error=${message}`);
+    await setRecordingSessionError(recordingSession.sessionId);
+    publishError('Failed to persist recording chunk to IndexedDB.');
+  }
+}
+
 function broadcast(message: RuntimeEventMessage): void {
   if (!chrome.runtime?.id) {
     return;
@@ -135,6 +274,7 @@ function updateStatus(status: AudioStatus, detail?: string): void {
       selectedDeviceId: state.selectedDeviceId,
       selectedSource: state.selectedSource,
       seq: state.seq,
+      diagnostics: computeDiagnostics(),
     },
   });
 }
@@ -303,8 +443,6 @@ async function stopRecording(): Promise<void> {
   const recorder = state.recorder;
   state.recorder = null;
 
-  let recordingChunks = [...state.chunks];
-
   if (recorder && recorder.state !== 'inactive') {
     const stopDataPromise = new Promise<Blob | null>((resolve) => {
       recorder.addEventListener(
@@ -319,7 +457,7 @@ async function stopRecording(): Promise<void> {
     recorder.requestData();
     const finalChunk = await stopDataPromise;
     if (finalChunk && finalChunk.size > 0) {
-      recordingChunks.push(finalChunk);
+      await persistChunk(finalChunk);
     }
   }
 
@@ -329,14 +467,18 @@ async function stopRecording(): Promise<void> {
     recorder.stop();
   }
 
-  state.chunks = [];
+  const recordingSession = state.recordingSession;
 
-  if (recordingChunks.length > 0) {
-    const recorderMimeType = recorder?.mimeType || recordingChunks[0]?.type || 'audio/webm';
-    const fullBlob = new Blob(recordingChunks, { type: recorderMimeType || 'audio/webm' });
+  if (recordingSession && recordingSession.chunkCount > 0) {
     updateStatus('Transcribing', 'Transcribing recording...');
 
     try {
+      const persistedChunks = await listRecordingChunksBySession(recordingSession.sessionId);
+      const recorderMimeType = recorder?.mimeType || persistedChunks[0]?.mimeType || recordingSession.mimeType || 'audio/webm';
+      const fullBlob = new Blob(
+        persistedChunks.map((chunk) => chunk.blob),
+        { type: recorderMimeType || 'audio/webm' },
+      );
       await transcribeFullRecording(fullBlob);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -348,6 +490,27 @@ async function stopRecording(): Promise<void> {
   state.useMockTranscription = false;
   inMemoryApiKey = null;
 
+  if (recordingSession) {
+    try {
+      const updated = await updateRecordingSession(recordingSession.sessionId, {
+        stopTime: Date.now(),
+        status: state.status === 'Error' ? 'error' : 'stopped',
+      });
+      if (updated) {
+        state.recordingSession = updated;
+      }
+
+      const diagnostics = computeDiagnostics();
+      const summarySession = state.recordingSession ?? recordingSession;
+      console.info(
+        `[recording-summary] sessionId=${summarySession.sessionId} durationSec=${diagnostics.durationSec} chunks=${summarySession.chunkCount} totalBytes=${summarySession.totalBytes} totalMB=${diagnostics.totalMB.toFixed(2)} mbPerMin=${diagnostics.mbPerMin.toFixed(2)} estMinTo25MB=${diagnostics.estMinTo25MB === null ? 'n/a' : diagnostics.estMinTo25MB.toFixed(1)} mime=${summarySession.mimeType || 'unknown'} timesliceMs=${summarySession.timesliceMs}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[recording-store] failed to finalize recording session sessionId=${recordingSession.sessionId} error=${message}`);
+    }
+  }
+
   if (state.activeSessionId) {
     void updateSessionState(state.activeSessionId, {
       endedAt: Date.now(),
@@ -355,6 +518,10 @@ async function stopRecording(): Promise<void> {
     });
     state.activeSessionId = null;
   }
+
+  stopDiagnosticsTimer();
+  state.recordingSession = null;
+  state.nextChunkSeq = 1;
 
   updateStatus('Stopped', 'Stopped');
 }
@@ -486,14 +653,36 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
 
   const selectedMimeType = chooseRecorderMimeType();
   const recorder = selectedMimeType ? new MediaRecorder(stream, { mimeType: selectedMimeType }) : new MediaRecorder(stream);
+  const recorderMimeType = recorder.mimeType || selectedMimeType || 'audio/webm';
   console.info(`STT: recorder mimeType=${recorder.mimeType || 'default'}`);
+
+  state.recordingSession = {
+    sessionId,
+    startTime: Date.now(),
+    status: 'recording',
+    totalBytes: 0,
+    chunkCount: 0,
+    mimeType: recorderMimeType,
+    timesliceMs: CHUNK_TIMESLICE_MS,
+  };
+  state.nextChunkSeq = 1;
+
+  try {
+    await createRecordingSession(state.recordingSession);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[recording-store] failed to create recording session sessionId=${sessionId} error=${message}`);
+    await setRecordingSessionError(sessionId);
+    throw new Error('Failed to create recording session in IndexedDB.');
+  }
+
   recorder.ondataavailable = (event) => {
     const blob = event.data;
     if (!blob || blob.size === 0) {
       return;
     }
 
-    state.chunks.push(blob);
+    void persistChunk(blob);
   };
 
   recorder.onerror = () => {
@@ -509,6 +698,7 @@ async function startRecording(deviceId?: string, source: AudioSource = 'mic', st
   recorder.start(CHUNK_TIMESLICE_MS);
 
   state.recorder = recorder;
+  startDiagnosticsTimer();
   const sourceDetail =
     state.selectedSource === 'tab' ? 'active tab audio' : state.selectedSource === 'mix' ? `tab + mic (${state.selectedDeviceId})` : state.selectedDeviceId;
   updateStatus('Listening', `Listening on ${sourceDetail}`);
@@ -526,6 +716,7 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
       seq: state.seq,
       detail: state.detail,
       transcript: state.transcript,
+      diagnostics: computeDiagnostics(),
     });
     return;
   }

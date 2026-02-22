@@ -11,6 +11,15 @@ type AuthState = {
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type AppView = 'transcription' | 'notes' | 'settings';
 type AudioSource = 'mic' | 'tab' | 'mix';
+
+type RecordingDiagnostics = {
+  durationSec: number;
+  durationLabel: string;
+  totalBytes: number;
+  totalMB: number;
+  mbPerMin: number;
+  estMinTo25MB: number | null;
+};
 type UITheme = 'light' | 'dark';
 type UILang = 'en' | 'zh';
 
@@ -23,7 +32,14 @@ type RuntimeEventMessage =
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
   | {
       type: 'STATUS_UPDATE';
-      payload: { status: AudioStatus; detail?: string; selectedDeviceId: string; selectedSource: AudioSource; seq: number };
+      payload: {
+        status: AudioStatus;
+        detail?: string;
+        selectedDeviceId: string;
+        selectedSource: AudioSource;
+        seq: number;
+        diagnostics: RecordingDiagnostics;
+      };
     }
   | { type: 'ERROR'; payload: { message: string } };
 
@@ -637,6 +653,7 @@ async function queryStateFromOffscreen() {
         selectedSource?: AudioSource;
         seq?: number;
         transcript?: string;
+        diagnostics?: RecordingDiagnostics;
       }>)
     | undefined;
 
@@ -655,6 +672,14 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>('transcription');
   const [status, setStatus] = useState<AudioStatus>('Idle');
+  const [recordingDiagnostics, setRecordingDiagnostics] = useState<RecordingDiagnostics>({
+    durationSec: 0,
+    durationLabel: '00:00',
+    totalBytes: 0,
+    totalMB: 0,
+    mbPerMin: 0,
+    estMinTo25MB: null,
+  });
   const [devices, setDevices] = useState<DeviceOption[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [selectedSource, setSelectedSource] = useState<AudioSource>('mic');
@@ -799,6 +824,9 @@ function App() {
         setSelectedDeviceId(snapshot?.selectedDeviceId ?? persistedDeviceId);
         setSelectedSource(snapshot?.selectedSource ?? persistedAudioSource);
         setTranscriptText(liveTranscript || latestSession?.transcript || '');
+        if (snapshot?.diagnostics) {
+          setRecordingDiagnostics(snapshot.diagnostics);
+        }
       } catch (syncError) {
         if (disposed) {
           return;
@@ -815,6 +843,7 @@ function App() {
         setStatus(message.payload.status);
         setSelectedDeviceId(message.payload.selectedDeviceId);
         setSelectedSource(message.payload.selectedSource);
+        setRecordingDiagnostics(message.payload.diagnostics);
 
         if (activeView === 'notes' && (message.payload.status === 'Idle' || message.payload.status === 'Stopped')) {
           void loadNotesSessions();
@@ -1218,6 +1247,10 @@ function App() {
               <div className="info-row__status">
                 <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
                 <p className="info-row__status-text">{t('status')}: {status}</p>
+                <p className="info-row__status-text">Duration: {recordingDiagnostics.durationLabel}</p>
+                <p className="info-row__status-text">Size: {recordingDiagnostics.totalMB.toFixed(2)} MB</p>
+                <p className="info-row__status-text">Rate: {recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</p>
+                <p className="info-row__status-text">Est to 25MB: {recordingDiagnostics.estMinTo25MB === null ? 'n/a' : `${recordingDiagnostics.estMinTo25MB.toFixed(1)} min`}</p>
               </div>
               <p className="info-row__meta">{sttStatusLine}</p>
             </div>
