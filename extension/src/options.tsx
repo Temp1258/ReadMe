@@ -30,7 +30,11 @@ function parseDefaultSourceInput(source: string): DefaultSource {
 
 function OptionsPage() {
   const [apiKeyInput, setApiKeyInput] = useState('');
-  const [tencentApiKeyInput, setTencentApiKeyInput] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<'openai' | 'tencent' | 'aliyun'>('openai');
+  const [tencentSecretIdInput, setTencentSecretIdInput] = useState('');
+  const [tencentSecretKeyInput, setTencentSecretKeyInput] = useState('');
+  const [aliyunAccessKeyIdInput, setAliyunAccessKeyIdInput] = useState('');
+  const [aliyunAccessKeySecretInput, setAliyunAccessKeySecretInput] = useState('');
   const [storedApiKey, setStoredApiKey] = useState('');
   const [defaultSource, setDefaultSource] = useState<DefaultSource>(defaults.defaultSource);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -116,9 +120,23 @@ function OptionsPage() {
     }
   };
 
-  const handleClearTencentInput = () => {
-    if (!window.confirm('Clear Tencent API key input?')) return;
-    setTencentApiKeyInput('');
+  const handleClearTencentInputs = () => {
+    if (!window.confirm('Clear Tencent credentials?')) return;
+    setTencentSecretIdInput('');
+    setTencentSecretKeyInput('');
+    setStatusMessage('Inputs cleared.');
+  };
+
+  const handleClearAliyunInputs = () => {
+    if (!window.confirm('Clear Aliyun credentials?')) return;
+    setAliyunAccessKeyIdInput('');
+    setAliyunAccessKeySecretInput('');
+    setStatusMessage('Inputs cleared.');
+  };
+
+  const handleUiOnlySave = () => {
+    setError(null);
+    setStatusMessage('Saved (UI only, not persisted).');
   };
 
   const keySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
@@ -131,37 +149,115 @@ function OptionsPage() {
 
       <section className="panel">
         <form className="form" onSubmit={handleSubmit}>
-          <label className="form__label" htmlFor="whisper-api-key-status">
-            Whisper API Key status
+          <label className="form__label" htmlFor="stt-provider">
+            STT Provider
           </label>
-          <input className="form__input" id="whisper-api-key-status" readOnly type="text" value={keySummary} />
-
-          <label className="form__label" htmlFor="whisper-api-key">
-            New Whisper API Key (optional)
-          </label>
-          <input
+          <select
             className="form__input"
-            id="whisper-api-key"
-            onChange={(event) => setApiKeyInput(event.target.value)}
-            placeholder="sk-..."
-            type="password"
-            value={apiKeyInput}
-          />
+            id="stt-provider"
+            onChange={(event) => setSelectedProvider(event.target.value as 'openai' | 'tencent' | 'aliyun')}
+            value={selectedProvider}
+          >
+            <option value="openai">OpenAI Whisper</option>
+            <option value="tencent">Tencent</option>
+            <option value="aliyun">Aliyun</option>
+          </select>
 
-          <label className="form__label" htmlFor="tencent-api-key">
-            Tencent API Key input (not saved)
-          </label>
-          <input
-            className="form__input"
-            id="tencent-api-key"
-            onChange={(event) => setTencentApiKeyInput(event.target.value)}
-            placeholder="Tencent key"
-            type="password"
-            value={tencentApiKeyInput}
-          />
-          <button className="button button--secondary" disabled={isSaving || !tencentApiKeyInput} onClick={handleClearTencentInput} type="button">
-            Clear Tencent input
-          </button>
+          {selectedProvider === 'openai' ? (
+            <>
+              <label className="form__label" htmlFor="whisper-api-key-status">
+                Whisper API Key status
+              </label>
+              <input className="form__input" id="whisper-api-key-status" readOnly type="text" value={keySummary} />
+
+              <label className="form__label" htmlFor="whisper-api-key">
+                New Whisper API Key (optional)
+              </label>
+              <input
+                className="form__input"
+                id="whisper-api-key"
+                onChange={(event) => setApiKeyInput(event.target.value)}
+                placeholder="sk-..."
+                type="password"
+                value={apiKeyInput}
+              />
+
+              <button className="button" disabled={isSaving} type="submit">
+                {isSaving ? 'Saving...' : 'Save'}
+              </button>
+              <button className="button button--secondary" disabled={isSaving || !storedApiKey} onClick={handleClearApiKey} type="button">
+                Clear API key
+              </button>
+            </>
+          ) : null}
+
+          {selectedProvider === 'tencent' ? (
+            <>
+              <label className="form__label" htmlFor="tencent-secret-id">
+                Tencent SecretId
+              </label>
+              <input
+                className="form__input"
+                id="tencent-secret-id"
+                onChange={(event) => setTencentSecretIdInput(event.target.value)}
+                type="password"
+                value={tencentSecretIdInput}
+              />
+
+              <label className="form__label" htmlFor="tencent-secret-key">
+                Tencent SecretKey
+              </label>
+              <input
+                className="form__input"
+                id="tencent-secret-key"
+                onChange={(event) => setTencentSecretKeyInput(event.target.value)}
+                type="password"
+                value={tencentSecretKeyInput}
+              />
+              <p className="status-row__hint">(UI only, not saved)</p>
+
+              <button className="button button--secondary" onClick={handleClearTencentInputs} type="button">
+                Clear Tencent inputs
+              </button>
+              <button className="button" onClick={handleUiOnlySave} type="button">
+                Save
+              </button>
+            </>
+          ) : null}
+
+          {selectedProvider === 'aliyun' ? (
+            <>
+              <label className="form__label" htmlFor="aliyun-access-key-id">
+                Aliyun AccessKeyId
+              </label>
+              <input
+                className="form__input"
+                id="aliyun-access-key-id"
+                onChange={(event) => setAliyunAccessKeyIdInput(event.target.value)}
+                type="password"
+                value={aliyunAccessKeyIdInput}
+              />
+
+              <label className="form__label" htmlFor="aliyun-access-key-secret">
+                Aliyun AccessKeySecret
+              </label>
+              <input
+                className="form__input"
+                id="aliyun-access-key-secret"
+                onChange={(event) => setAliyunAccessKeySecretInput(event.target.value)}
+                type="password"
+                value={aliyunAccessKeySecretInput}
+              />
+              <p className="status-row__hint">(UI only, not saved)</p>
+
+              <button className="button button--secondary" onClick={handleClearAliyunInputs} type="button">
+                Clear Aliyun inputs
+              </button>
+              <button className="button" onClick={handleUiOnlySave} type="button">
+                Save
+              </button>
+            </>
+          ) : null}
 
           <label className="form__label" htmlFor="default-source">
             Default audio source
@@ -179,13 +275,6 @@ function OptionsPage() {
             <option value="mix">Mix (tab + mic)</option>
           </select>
           <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
-
-          <button className="button" disabled={isSaving} type="submit">
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
-          <button className="button button--secondary" disabled={isSaving || !storedApiKey} onClick={handleClearApiKey} type="button">
-            Clear API key
-          </button>
 
           {statusMessage ? <p className="success">{statusMessage}</p> : null}
           {error ? <p className="error">{error}</p> : null}
