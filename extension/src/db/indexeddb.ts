@@ -18,9 +18,35 @@ export type SessionRecord = {
   segments: SessionSegment[];
 };
 
+export type RecordingSessionStatus = 'recording' | 'stopped' | 'error';
+
+export type RecordingSessionRecord = {
+  sessionId: string;
+  startTime: number;
+  stopTime?: number;
+  status: RecordingSessionStatus;
+  totalBytes: number;
+  chunkCount: number;
+  mimeType: string;
+  timesliceMs: number;
+};
+
+export type RecordingChunkRecord = {
+  id: string;
+  sessionId: string;
+  seq: number;
+  createdAt: number;
+  bytes: number;
+  mimeType: string;
+  blob: Blob;
+};
+
 const SESSION_DB_NAME = 'ticnote';
 const STORE_NAME = 'sessions';
-const DB_VERSION = 1;
+const RECORDING_SESSION_STORE_NAME = 'recording_sessions';
+const RECORDING_CHUNK_STORE_NAME = 'recording_chunks';
+const RECORDING_CHUNK_SESSION_SEQ_INDEX = 'by_session_seq';
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -36,6 +62,15 @@ function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(RECORDING_SESSION_STORE_NAME)) {
+        db.createObjectStore(RECORDING_SESSION_STORE_NAME, { keyPath: 'sessionId' });
+      }
+
+      if (!db.objectStoreNames.contains(RECORDING_CHUNK_STORE_NAME)) {
+        const chunkStore = db.createObjectStore(RECORDING_CHUNK_STORE_NAME, { keyPath: 'id' });
+        chunkStore.createIndex(RECORDING_CHUNK_SESSION_SEQ_INDEX, ['sessionId', 'seq'], { unique: true });
       }
     };
 
@@ -184,4 +219,76 @@ export async function clearSessions(): Promise<void> {
   const tx = db.transaction(STORE_NAME, 'readwrite');
   tx.objectStore(STORE_NAME).clear();
   await transactionDone(tx);
+}
+
+export async function createRecordingSession(session: RecordingSessionRecord): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(RECORDING_SESSION_STORE_NAME, 'readwrite');
+  tx.objectStore(RECORDING_SESSION_STORE_NAME).put(session);
+  await transactionDone(tx);
+}
+
+export async function getRecordingSession(sessionId: string): Promise<RecordingSessionRecord | null> {
+  const db = await openDb();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(RECORDING_SESSION_STORE_NAME, 'readonly');
+    const request = tx.objectStore(RECORDING_SESSION_STORE_NAME).get(sessionId);
+
+    request.onsuccess = () => {
+      resolve((request.result as RecordingSessionRecord | undefined) ?? null);
+    };
+
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to read recording session from IndexedDB.'));
+    };
+  });
+}
+
+export async function updateRecordingSession(
+  sessionId: string,
+  updates: Partial<Omit<RecordingSessionRecord, 'sessionId'>>,
+): Promise<RecordingSessionRecord | null> {
+  const existing = await getRecordingSession(sessionId);
+  if (!existing) {
+    return null;
+  }
+
+  const updated: RecordingSessionRecord = {
+    ...existing,
+    ...updates,
+  };
+
+  const db = await openDb();
+  const tx = db.transaction(RECORDING_SESSION_STORE_NAME, 'readwrite');
+  tx.objectStore(RECORDING_SESSION_STORE_NAME).put(updated);
+  await transactionDone(tx);
+  return updated;
+}
+
+export async function appendRecordingChunk(chunk: RecordingChunkRecord): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readwrite');
+  tx.objectStore(RECORDING_CHUNK_STORE_NAME).put(chunk);
+  await transactionDone(tx);
+}
+
+export async function listRecordingChunksBySession(sessionId: string): Promise<RecordingChunkRecord[]> {
+  const db = await openDb();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readonly');
+    const store = tx.objectStore(RECORDING_CHUNK_STORE_NAME);
+    const index = store.index(RECORDING_CHUNK_SESSION_SEQ_INDEX);
+    const range = IDBKeyRange.bound([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER]);
+    const request = index.getAll(range);
+
+    request.onsuccess = () => {
+      resolve((request.result as RecordingChunkRecord[] | undefined) ?? []);
+    };
+
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to list recording chunks from IndexedDB.'));
+    };
+  });
 }
