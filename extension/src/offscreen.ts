@@ -61,7 +61,7 @@ type GetSttSettingsResponse =
 
 const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
-const MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
+const MAX_SEGMENT_BYTES = 19 * 1024 * 1024;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -389,7 +389,7 @@ async function countEstimatedSegments(sessionId: string): Promise<number> {
 
 function buildSegmentErrorMessage(segmentIndex: number, segmentBytes: number, error: WhisperApiError): string {
   if (error.status === 413) {
-    return `Segment ${segmentIndex} failed with status 413. Segment size ${segmentBytes} bytes exceeds safe upload threshold ${MAX_SEGMENT_BYTES} bytes.`;
+    return `Segment ${segmentIndex} failed with status 413. Segment size ${segmentBytes} bytes exceeded the safe upload threshold (<20MB) of ${MAX_SEGMENT_BYTES} bytes.`;
   }
 
   return `Segment ${segmentIndex} failed with status ${error.status}.`;
