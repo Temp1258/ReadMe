@@ -378,9 +378,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
 
   const segmentMB = segmentBlob.size / (1024 * 1024);
   updateStatus('Transcribing', `Transcribing segment ${segmentIndex}/${totalSegments} (${segmentMB.toFixed(2)}MB)...`);
-  console.info(
-    `[transcribe-segment] sessionId=${state.recordingSession?.sessionId ?? 'unknown'} seg=${segmentIndex} bytes=${segmentBlob.size} mb=${segmentMB.toFixed(2)}`,
-  );
+  console.info(`[transcribe-segment] seg=${segmentIndex} size=${segmentBlob.size} type=${segmentBlob.type || '(empty)'}`);
 
   if (state.useMockTranscription) {
     await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`);
@@ -404,13 +402,31 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
       await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`);
       return;
     } catch (error) {
-      if (
+      const isFormatError =
         error instanceof WhisperApiError &&
         error.status === 400 &&
-        error.apiMessage.toLowerCase().includes('invalid file format')
-      ) {
-        await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`);
-        return;
+        ['invalid file format', 'unsupported', 'could not decode'].some((needle) =>
+          error.apiMessage.toLowerCase().includes(needle),
+        );
+
+      if (isFormatError) {
+        console.info(`format-error fallback retrying seg ${segmentIndex}`);
+
+        try {
+          const retryBlob = segmentBlob.type ? segmentBlob : new Blob([segmentBlob], { type: 'audio/webm' });
+          const retryText = await transcribeAudioBlob(retryBlob, {
+            apiKey,
+            model: 'whisper-1',
+            fileName: filename,
+            maxRetries: 1,
+          });
+          console.info(`fallback success seg ${segmentIndex}`);
+          await appendTranscript(segmentIndex, retryText || `[empty] segment ${segmentIndex}`);
+          return;
+        } catch {
+          await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`);
+          return;
+        }
       }
 
       if (error instanceof WhisperApiError && error.status !== 429 && error.status < 500) {
