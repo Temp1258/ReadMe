@@ -302,6 +302,10 @@ export async function streamRecordingChunksBySession(
   return new Promise((resolve, reject) => {
     let settled = false;
     let stopped = false;
+    let cursorDone = false;
+    let txDone = false;
+    let pendingCount = 0;
+    let firstError: unknown = null;
 
     const resolveOnce = () => {
       if (settled) {
@@ -320,6 +324,19 @@ export async function streamRecordingChunksBySession(
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
+    const finalize = () => {
+      if (stopped) {
+        if (firstError) {
+          rejectOnce(firstError);
+        }
+        return;
+      }
+
+      if (cursorDone && txDone && pendingCount === 0) {
+        resolveOnce();
+      }
+    };
+
     const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readonly');
     const store = tx.objectStore(RECORDING_CHUNK_STORE_NAME);
     const index = store.index(RECORDING_CHUNK_SESSION_SEQ_INDEX);
@@ -333,19 +350,37 @@ export async function streamRecordingChunksBySession(
 
       const cursor = request.result;
       if (!cursor) {
-        resolveOnce();
+        cursorDone = true;
+        finalize();
         return;
       }
 
       const chunk = cursor.value as RecordingChunkRecord;
+      pendingCount += 1;
+
+      // Important: continue the cursor synchronously in the request callback.
+      // Calling continue() after an async gap can happen after the transaction closes.
+      cursor.continue();
+
       Promise.resolve(onChunk(chunk))
-        .then(() => {
-          if (!stopped) {
-            cursor.continue();
-          }
-        })
+        .then(() => undefined)
         .catch((error) => {
-          rejectOnce(error);
+          if (stopped) {
+            return;
+          }
+
+          firstError = error;
+          stopped = true;
+          try {
+            tx.abort();
+          } catch {
+            // Ignore InvalidStateError if transaction already finished.
+          }
+          rejectOnce(firstError);
+        })
+        .finally(() => {
+          pendingCount -= 1;
+          finalize();
         });
     };
 
@@ -354,7 +389,8 @@ export async function streamRecordingChunksBySession(
     };
 
     tx.oncomplete = () => {
-      resolveOnce();
+      txDone = true;
+      finalize();
     };
 
     tx.onerror = () => {
