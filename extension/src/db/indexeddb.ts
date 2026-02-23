@@ -300,6 +300,26 @@ export async function streamRecordingChunksBySession(
   const db = await openDb();
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let stopped = false;
+
+    const resolveOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+
+    const rejectOnce = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      stopped = true;
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
     const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readonly');
     const store = tx.objectStore(RECORDING_CHUNK_STORE_NAME);
     const index = store.index(RECORDING_CHUNK_SESSION_SEQ_INDEX);
@@ -307,29 +327,42 @@ export async function streamRecordingChunksBySession(
     const request = index.openCursor(range, 'next');
 
     request.onsuccess = () => {
+      if (stopped) {
+        return;
+      }
+
       const cursor = request.result;
       if (!cursor) {
-        resolve();
+        resolveOnce();
         return;
       }
 
       const chunk = cursor.value as RecordingChunkRecord;
       Promise.resolve(onChunk(chunk))
-        .then(() => cursor.continue())
+        .then(() => {
+          if (!stopped) {
+            cursor.continue();
+          }
+        })
         .catch((error) => {
-          tx.abort();
-          reject(error instanceof Error ? error : new Error(String(error)));
+          rejectOnce(error);
         });
     };
 
     request.onerror = () => {
-      reject(request.error ?? new Error('Unable to stream recording chunks from IndexedDB.'));
+      rejectOnce(request.error ?? new Error('Unable to stream recording chunks from IndexedDB.'));
+    };
+
+    tx.oncomplete = () => {
+      resolveOnce();
+    };
+
+    tx.onerror = () => {
+      rejectOnce(tx.error ?? new Error('IndexedDB transaction failed while streaming recording chunks.'));
     };
 
     tx.onabort = () => {
-      if (tx.error) {
-        reject(tx.error);
-      }
+      rejectOnce(tx.error ?? new Error('IndexedDB transaction aborted while streaming recording chunks.'));
     };
   });
 }
