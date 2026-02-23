@@ -447,28 +447,125 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let totalSegments = 0;
   let currentSegmentBlobs: Blob[] = [];
   let currentSegmentBytes = 0;
-  const segmentBlobs: Blob[] = [];
+  const segmentBlobs: Array<{ blob: Blob; headerPrepended: boolean }> = [];
+  let headerBytes: Uint8Array | null = null;
+  let headerExtractionLogged = false;
+  let seg2NoHeaderLogged = false;
+  let firstChunkSeen = false;
+
+  const tryExtractWebmHeaderBytes = async (firstChunkBlob: Blob): Promise<void> => {
+    if (headerExtractionLogged) {
+      return;
+    }
+
+    const firstChunkBytes = new Uint8Array(await firstChunkBlob.arrayBuffer());
+    const clusterMarker = [0x1f, 0x43, 0xb6, 0x75];
+    let markerIndex = -1;
+
+    for (let idx = 0; idx <= firstChunkBytes.length - clusterMarker.length; idx += 1) {
+      if (
+        firstChunkBytes[idx] === clusterMarker[0] &&
+        firstChunkBytes[idx + 1] === clusterMarker[1] &&
+        firstChunkBytes[idx + 2] === clusterMarker[2] &&
+        firstChunkBytes[idx + 3] === clusterMarker[3]
+      ) {
+        markerIndex = idx;
+        break;
+      }
+    }
+
+    if (markerIndex <= 0) {
+      headerBytes = null;
+      headerExtractionLogged = true;
+      console.info('[segmentation] header disabled reason=cluster marker missing or invalid offset');
+      return;
+    }
+
+    const candidateHeaderBytes = firstChunkBytes.subarray(0, markerIndex);
+    const headerLength = candidateHeaderBytes.byteLength;
+    const MIN_HEADER_BYTES = 256;
+    const MAX_HEADER_BYTES = 1024 * 1024;
+
+    if (headerLength < MIN_HEADER_BYTES || headerLength > MAX_HEADER_BYTES) {
+      headerBytes = null;
+      headerExtractionLogged = true;
+      console.info(
+        `[segmentation] header disabled reason=header length out of bounds bytes=${headerLength} markerIndex=${markerIndex}`,
+      );
+      return;
+    }
+
+    const stableHeaderBytes = new Uint8Array(headerLength);
+    stableHeaderBytes.set(candidateHeaderBytes);
+    headerBytes = stableHeaderBytes;
+    headerExtractionLogged = true;
+    console.info(`[segmentation] header extracted bytes=${headerLength} markerIndex=${markerIndex}`);
+  };
 
   const flushSegment = (): void => {
     if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
       return;
     }
 
-    const segmentBlob = new Blob(currentSegmentBlobs, { type: mimeType || 'audio/webm' });
-    segmentBlobs.push(segmentBlob);
+    const segIndex = segmentBlobs.length + 1;
+    const shouldPrependHeader = segIndex > 1 && headerBytes !== null;
+
+    if (segIndex === 1 && shouldPrependHeader) {
+      throw new Error('Invariant violation: seg1 must not prepend header bytes.');
+    }
+
+    if (segIndex > 1 && !shouldPrependHeader && headerBytes === null && !seg2NoHeaderLogged) {
+      console.info('[segmentation] seg2+ will NOT prepend header (headerBytes unavailable)');
+      seg2NoHeaderLogged = true;
+    }
+
+    const segmentParts: BlobPart[] = [];
+    if (shouldPrependHeader && headerBytes !== null) {
+      const headerArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(headerArrayBuffer).set(headerBytes);
+      segmentParts.push(new Blob([headerArrayBuffer]));
+    }
+    for (const blobPart of currentSegmentBlobs) {
+      segmentParts.push(blobPart);
+    }
+
+    const segmentBlob = new Blob(segmentParts, { type: mimeType || 'audio/webm' });
+    if (segmentBlob.size > MAX_SEGMENT_BYTES) {
+      throw new Error(
+        `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+      );
+    }
+
+    segmentBlobs.push({ blob: segmentBlob, headerPrepended: shouldPrependHeader });
     currentSegmentBlobs = [];
     currentSegmentBytes = 0;
   };
 
-  await streamRecordingChunksBySession(recordingSession.sessionId, (chunk) => {
-    if (chunk.bytes > MAX_SEGMENT_BYTES) {
+  await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
+    if (!firstChunkSeen) {
+      firstChunkSeen = true;
+      await tryExtractWebmHeaderBytes(chunk.blob);
+    }
+
+    const currentSegmentIndex = segmentBlobs.length + 1;
+    const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+
+    if (chunk.bytes + reservedHeaderBytes > MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${reservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    if (currentSegmentBytes > 0 && currentSegmentBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
+    if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
       flushSegment();
+    }
+
+    const nextSegmentIndex = segmentBlobs.length + 1;
+    const nextReservedHeaderBytes = nextSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+    if (chunk.bytes + nextReservedHeaderBytes > MAX_SEGMENT_BYTES) {
+      throw new Error(
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${nextReservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+      );
     }
 
     currentSegmentBlobs.push(chunk.blob);
@@ -478,8 +575,12 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   flushSegment();
   totalSegments = segmentBlobs.length;
 
-  for (const [index, segmentBlob] of segmentBlobs.entries()) {
-    await transcribeSegmentBlob(segmentBlob, index + 1, totalSegments);
+  for (const [index, segment] of segmentBlobs.entries()) {
+    const segNumber = index + 1;
+    console.info(
+      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended}`,
+    );
+    await transcribeSegmentBlob(segment.blob, segNumber, totalSegments);
   }
 }
 
