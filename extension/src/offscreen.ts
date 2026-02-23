@@ -361,32 +361,6 @@ async function appendTranscript(seq: number, text: string): Promise<void> {
   });
 }
 
-async function countEstimatedSegments(sessionId: string): Promise<number> {
-  let estimatedSegments = 0;
-  let runningBytes = 0;
-
-  await streamRecordingChunksBySession(sessionId, (chunk) => {
-    if (chunk.bytes > MAX_SEGMENT_BYTES) {
-      throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
-      );
-    }
-
-    if (runningBytes > 0 && runningBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
-      estimatedSegments += 1;
-      runningBytes = 0;
-    }
-
-    runningBytes += chunk.bytes;
-  });
-
-  if (runningBytes > 0) {
-    estimatedSegments += 1;
-  }
-
-  return estimatedSegments;
-}
-
 function buildSegmentErrorMessage(segmentIndex: number, segmentBytes: number, error: WhisperApiError): string {
   if (error.status === 413) {
     return `Segment ${segmentIndex} failed with status 413. Segment size ${segmentBytes} bytes exceeded the safe upload threshold (<20MB) of ${MAX_SEGMENT_BYTES} bytes.`;
@@ -454,7 +428,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
 }
 
 async function transcribeRecordingInSegments(recordingSession: RecordingSessionRecord, mimeType: string): Promise<void> {
-  let totalSegments = await countEstimatedSegments(recordingSession.sessionId);
+  let totalSegments = 0;
   let currentSegmentBlobs: Blob[] = [];
   let currentSegmentBytes = 0;
   const segmentBlobs: Blob[] = [];
