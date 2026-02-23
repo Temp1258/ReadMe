@@ -457,21 +457,20 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   const totalSegments = await countEstimatedSegments(recordingSession.sessionId);
   let currentSegmentBlobs: Blob[] = [];
   let currentSegmentBytes = 0;
-  let segmentIndex = 0;
+  const segmentBlobs: Blob[] = [];
 
-  const flushSegment = async (): Promise<void> => {
+  const flushSegment = (): void => {
     if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
       return;
     }
 
-    segmentIndex += 1;
     const segmentBlob = new Blob(currentSegmentBlobs, { type: mimeType || 'audio/webm' });
+    segmentBlobs.push(segmentBlob);
     currentSegmentBlobs = [];
     currentSegmentBytes = 0;
-    await transcribeSegmentBlob(segmentBlob, segmentIndex, totalSegments);
   };
 
-  await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
+  await streamRecordingChunksBySession(recordingSession.sessionId, (chunk) => {
     if (chunk.bytes > MAX_SEGMENT_BYTES) {
       throw new Error(
         `Chunk ${chunk.seq} is ${chunk.bytes} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
@@ -479,14 +478,18 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     }
 
     if (currentSegmentBytes > 0 && currentSegmentBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
-      await flushSegment();
+      flushSegment();
     }
 
     currentSegmentBlobs.push(chunk.blob);
     currentSegmentBytes += chunk.bytes;
   });
 
-  await flushSegment();
+  flushSegment();
+
+  for (const [index, segmentBlob] of segmentBlobs.entries()) {
+    await transcribeSegmentBlob(segmentBlob, index + 1, totalSegments);
+  }
 }
 
 async function stopRecording(): Promise<void> {
