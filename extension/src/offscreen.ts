@@ -454,7 +454,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
 }
 
 async function transcribeRecordingInSegments(recordingSession: RecordingSessionRecord, mimeType: string): Promise<void> {
-  const totalSegments = await countEstimatedSegments(recordingSession.sessionId);
+  let totalSegments = await countEstimatedSegments(recordingSession.sessionId);
   let currentSegmentBlobs: Blob[] = [];
   let currentSegmentBytes = 0;
   const segmentBlobs: Blob[] = [];
@@ -486,6 +486,7 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   });
 
   flushSegment();
+  totalSegments = segmentBlobs.length;
 
   for (const [index, segmentBlob] of segmentBlobs.entries()) {
     await transcribeSegmentBlob(segmentBlob, index + 1, totalSegments);
