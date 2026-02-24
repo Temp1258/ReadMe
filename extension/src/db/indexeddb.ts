@@ -306,6 +306,8 @@ export async function streamRecordingChunksBySession(
     let txDone = false;
     let pendingCount = 0;
     let firstError: unknown = null;
+    let chain = Promise.resolve();
+    let finalizeScheduled = false;
 
     const resolveOnce = () => {
       if (settled) {
@@ -325,16 +327,20 @@ export async function streamRecordingChunksBySession(
     };
 
     const finalize = () => {
-      if (stopped) {
-        if (firstError) {
-          rejectOnce(firstError);
-        }
+      if (settled || !cursorDone || !txDone || finalizeScheduled) {
         return;
       }
 
-      if (cursorDone && txDone && pendingCount === 0) {
-        resolveOnce();
-      }
+      finalizeScheduled = true;
+      void chain
+        .catch(() => undefined)
+        .then(() => {
+          if (firstError) {
+            rejectOnce(firstError);
+            return;
+          }
+          resolveOnce();
+        });
     };
 
     const tx = db.transaction(RECORDING_CHUNK_STORE_NAME, 'readonly');
@@ -357,30 +363,37 @@ export async function streamRecordingChunksBySession(
 
       const chunk = cursor.value as RecordingChunkRecord;
       pendingCount += 1;
+      console.debug(`[stream] enqueue seq=${chunk.seq} pending=${pendingCount}`);
 
       // Important: continue the cursor synchronously in the request callback.
       // Calling continue() after an async gap can happen after the transaction closes.
       cursor.continue();
 
-      Promise.resolve(onChunk(chunk))
-        .then(() => undefined)
-        .catch((error) => {
+      chain = chain
+        .catch(() => undefined)
+        .then(async () => {
           if (stopped) {
             return;
           }
 
-          firstError = error;
-          stopped = true;
-          try {
-            tx.abort();
-          } catch {
-            // Ignore InvalidStateError if transaction already finished.
+          console.debug(`[stream] start  seq=${chunk.seq}`);
+          await onChunk(chunk);
+          console.debug(`[stream] done   seq=${chunk.seq}`);
+        })
+        .catch((error) => {
+          if (!firstError) {
+            firstError = error;
+            stopped = true;
+            try {
+              tx.abort();
+            } catch {
+              // Ignore InvalidStateError if transaction already finished.
+            }
+            rejectOnce(firstError);
           }
-          rejectOnce(firstError);
         })
         .finally(() => {
           pendingCount -= 1;
-          finalize();
         });
     };
 
