@@ -452,6 +452,44 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let headerExtractionLogged = false;
   let seg2NoHeaderLogged = false;
   let firstChunkSeen = false;
+  let headerMarkerIndex = -1;
+  let headerScanLen = 0;
+  let extractedHeaderLen = 0;
+
+  const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
+  const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3] as const;
+  const HEADER_SCAN_LIMIT_BYTES = 1024 * 1024;
+
+  const findMarkerIndex = (buf: Uint8Array, marker: readonly number[]): number => {
+    for (let idx = 0; idx <= buf.length - marker.length; idx += 1) {
+      if (
+        buf[idx] === marker[0] &&
+        buf[idx + 1] === marker[1] &&
+        buf[idx + 2] === marker[2] &&
+        buf[idx + 3] === marker[3]
+      ) {
+        return idx;
+      }
+    }
+
+    return -1;
+  };
+
+  const bytesToHex = (buf: Uint8Array): string => Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join(' ');
+
+  const startsWithMarker = (buf: Uint8Array, marker: readonly number[]): boolean => {
+    if (buf.length < marker.length) {
+      return false;
+    }
+
+    for (let idx = 0; idx < marker.length; idx += 1) {
+      if (buf[idx] !== marker[idx]) {
+        return false;
+      }
+    }
+
+    return true;
+  };
 
   const tryExtractWebmHeaderBytes = async (firstChunkBlob: Blob): Promise<void> => {
     if (headerExtractionLogged) {
@@ -459,38 +497,32 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     }
 
     const firstChunkBytes = new Uint8Array(await firstChunkBlob.arrayBuffer());
-    const clusterMarker = [0x1f, 0x43, 0xb6, 0x75];
-    let markerIndex = -1;
+    const scanLen = Math.min(firstChunkBytes.length, HEADER_SCAN_LIMIT_BYTES);
+    headerScanLen = scanLen;
+    const markerIndex = findMarkerIndex(firstChunkBytes.subarray(0, scanLen), CLUSTER_MARKER);
+    headerMarkerIndex = markerIndex;
+    const markerIndexValid = markerIndex >= 0 && markerIndex <= firstChunkBytes.length - CLUSTER_MARKER.length;
 
-    for (let idx = 0; idx <= firstChunkBytes.length - clusterMarker.length; idx += 1) {
-      if (
-        firstChunkBytes[idx] === clusterMarker[0] &&
-        firstChunkBytes[idx + 1] === clusterMarker[1] &&
-        firstChunkBytes[idx + 2] === clusterMarker[2] &&
-        firstChunkBytes[idx + 3] === clusterMarker[3]
-      ) {
-        markerIndex = idx;
-        break;
-      }
-    }
-
-    if (markerIndex <= 0) {
+    if (!markerIndexValid) {
       headerBytes = null;
+      extractedHeaderLen = 0;
       headerExtractionLogged = true;
-      console.info('[segmentation] header disabled reason=cluster marker missing or invalid offset');
+      console.info(
+        `[segmentation] header disabled reason=cluster marker missing or invalid offset markerIndex=${markerIndex} scanLen=${scanLen}`,
+      );
       return;
     }
 
-    const candidateHeaderBytes = firstChunkBytes.subarray(0, markerIndex);
+    const candidateHeaderBytes = firstChunkBytes.slice(0, markerIndex);
     const headerLength = candidateHeaderBytes.byteLength;
-    const MIN_HEADER_BYTES = 256;
     const MAX_HEADER_BYTES = 1024 * 1024;
 
-    if (headerLength < MIN_HEADER_BYTES || headerLength > MAX_HEADER_BYTES) {
+    if (headerLength > MAX_HEADER_BYTES) {
       headerBytes = null;
+      extractedHeaderLen = 0;
       headerExtractionLogged = true;
       console.info(
-        `[segmentation] header disabled reason=header length out of bounds bytes=${headerLength} markerIndex=${markerIndex}`,
+        `[segmentation] header disabled reason=header length out of bounds bytes=${headerLength} markerIndex=${markerIndex} scanLen=${scanLen}`,
       );
       return;
     }
@@ -498,11 +530,12 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     const stableHeaderBytes = new Uint8Array(headerLength);
     stableHeaderBytes.set(candidateHeaderBytes);
     headerBytes = stableHeaderBytes;
+    extractedHeaderLen = headerLength;
     headerExtractionLogged = true;
-    console.info(`[segmentation] header extracted bytes=${headerLength} markerIndex=${markerIndex}`);
+    console.info(`[segmentation] header extracted bytes=${headerLength} markerIndex=${markerIndex} scanLen=${scanLen}`);
   };
 
-  const flushSegment = (): void => {
+  const flushSegment = async (): Promise<void> => {
     if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
       return;
     }
@@ -520,23 +553,35 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     }
 
     const segmentParts: BlobPart[] = [];
+    let headerPrepended = false;
+
     if (shouldPrependHeader && headerBytes !== null) {
-      const headerArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
-      new Uint8Array(headerArrayBuffer).set(headerBytes);
-      segmentParts.push(new Blob([headerArrayBuffer]));
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      segmentParts.push(new Blob([stableHeaderArrayBuffer]));
+      headerPrepended = true;
     }
     for (const blobPart of currentSegmentBlobs) {
       segmentParts.push(blobPart);
     }
 
-    const segmentBlob = new Blob(segmentParts, { type: mimeType || 'audio/webm' });
+    let segmentBlob = new Blob(segmentParts, { type: mimeType || 'audio/webm' });
+    const segmentBytes = new Uint8Array(await segmentBlob.slice(0, 64).arrayBuffer());
+
+    if (!startsWithMarker(segmentBytes, EBML_MAGIC) && headerBytes !== null) {
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      segmentBlob = new Blob([stableHeaderArrayBuffer, segmentBlob], { type: mimeType || 'audio/webm' });
+      headerPrepended = true;
+    }
+
     if (segmentBlob.size > MAX_SEGMENT_BYTES) {
       throw new Error(
         `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    segmentBlobs.push({ blob: segmentBlob, headerPrepended: shouldPrependHeader });
+    segmentBlobs.push({ blob: segmentBlob, headerPrepended });
     currentSegmentBlobs = [];
     currentSegmentBytes = 0;
   };
@@ -557,7 +602,7 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     }
 
     if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
-      flushSegment();
+      await flushSegment();
     }
 
     const nextSegmentIndex = segmentBlobs.length + 1;
@@ -572,13 +617,22 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     currentSegmentBytes += chunk.bytes;
   });
 
-  flushSegment();
+  await flushSegment();
   totalSegments = segmentBlobs.length;
 
   for (const [index, segment] of segmentBlobs.entries()) {
     const segNumber = index + 1;
+    const segFirst64Bytes = new Uint8Array(await segment.blob.slice(0, 64).arrayBuffer());
+    const segFirst4Hex = bytesToHex(segFirst64Bytes.slice(0, 4));
+    const segFirst64Hex = bytesToHex(segFirst64Bytes);
+
+    const segHexLog =
+      segNumber === 1
+        ? `segFirst4Hex=${segFirst4Hex} segFirst64Hex=${segFirst64Hex}`
+        : `segFirst4Hex=${segFirst4Hex}`;
+
     console.info(
-      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended}`,
+      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
     );
     await transcribeSegmentBlob(segment.blob, segNumber, totalSegments);
   }
