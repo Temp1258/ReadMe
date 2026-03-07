@@ -1006,41 +1006,62 @@ function App() {
 
         {activeView === 'transcription' ? (
           <section className="transcription-view">
-            <div className="info-row">
-              <div className="info-row__status">
-                <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
-                <p className="info-row__status-text">{t('status')}: {status}</p>
-                <p className="info-row__status-text">Duration: {recordingDiagnostics.durationLabel}</p>
-                <p className="info-row__status-text">Size: {recordingDiagnostics.totalMB.toFixed(2)} MB</p>
-                <p className="info-row__status-text">Rate: {recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</p>
-                <p className="info-row__status-text">Est to 25MB: {recordingDiagnostics.estMinTo25MB === null ? 'n/a' : `${recordingDiagnostics.estMinTo25MB.toFixed(1)} min`}</p>
+            <section className="status-card" aria-label={t('status')}>
+              <div className="status-card__header">
+                <div className="status-pill">
+                  <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
+                  <p className="status-pill__label">{t('status')}</p>
+                  <p className="status-pill__value">{status}</p>
+                </div>
+                <p className="status-card__provider">{sttStatusLine}</p>
               </div>
-              <p className="info-row__meta">{sttStatusLine}</p>
-            </div>
+              <div className="status-metrics" role="list" aria-label="Recording diagnostics">
+                <p className="status-metrics__item" role="listitem">
+                  <span className="status-metrics__label">Duration</span>
+                  <span className="status-metrics__value">{recordingDiagnostics.durationLabel}</span>
+                </p>
+                <p className="status-metrics__item" role="listitem">
+                  <span className="status-metrics__label">Size</span>
+                  <span className="status-metrics__value">{recordingDiagnostics.totalMB.toFixed(2)} MB</span>
+                </p>
+                <p className="status-metrics__item" role="listitem">
+                  <span className="status-metrics__label">Rate</span>
+                  <span className="status-metrics__value">{recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</span>
+                </p>
+                <p className="status-metrics__item" role="listitem">
+                  <span className="status-metrics__label">Est. 25MB</span>
+                  <span className="status-metrics__value">
+                    {recordingDiagnostics.estMinTo25MB === null ? 'n/a' : `${recordingDiagnostics.estMinTo25MB.toFixed(1)} min`}
+                  </span>
+                </p>
+              </div>
+            </section>
 
-            <div className="warning-inline warning-inline--compact">
-              <p>
-                {t('warningOneLine')}
-                <button className="link-button" onClick={handleLearnMoreClick} type="button">
-                  {t('learnMore')}
-                </button>
-              </p>
-            </div>
-
-            <section className="controls-row">
+            <section className="action-card">
               {!isRecordingActive ? (
-                <button className="button button--primary" onClick={handleStartListening} type="button">
+                <button className="button button--primary action-card__button" onClick={handleStartListening} type="button">
                   {t('start')}
                 </button>
               ) : (
-                <button className="button button--primary" onClick={handleStopListening} type="button">
+                <button className="button button--primary action-card__button" onClick={handleStopListening} type="button">
                   {t('stop')}
                 </button>
               )}
+
+              <div className="warning-inline warning-inline--compact">
+                <p>
+                  {t('warningOneLine')}
+                  <button className="link-button" onClick={handleLearnMoreClick} type="button">
+                    {t('learnMore')}
+                  </button>
+                </p>
+              </div>
             </section>
 
             <section className="inputs-section">
-              <p className="section-label">{t('inputs')}</p>
+              <div className="inputs-section__header">
+                <p className="section-label">{t('inputs')}</p>
+              </div>
               <div className="source-grid">
                 <div className="field-group">
                   <label className="form__label" htmlFor="audio-source">
@@ -1088,6 +1109,7 @@ function App() {
             <section className="transcript-panel">
               <div className="transcript-panel__header">
                 <h2>{t('transcriptTitle')}</h2>
+                <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
               </div>
               <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
                 {!transcriptText ? <p className="transcript__line transcript__line--muted">{t('transcriptEmpty')}</p> : null}
