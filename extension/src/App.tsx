@@ -1,12 +1,6 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
 import { loadSettings } from './settings';
-
-type AuthState = {
-  token: string;
-  email: string;
-  userId?: string;
-};
 
 type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
 type AppView = 'transcription' | 'notes' | 'settings';
@@ -206,13 +200,10 @@ async function downloadTextFile(filename: string, mimeType: string, content: str
   }
 }
 
-const AUTH_STORAGE_KEY = 'auth';
 const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
 const UI_THEME_STORAGE_KEY = 'uiTheme';
 const UI_LANG_STORAGE_KEY = 'uiLang';
-const DEFAULT_API_BASE_URL = 'http://localhost:8080';
-const DEV_MOCK_TOKEN = 'dev-mock-token';
 const OFFSCREEN_DOCUMENT_PATH = 'dist/src/offscreen.html';
 
 type RuntimeContext = {
@@ -311,15 +302,6 @@ const UI_COPY = {
     privacySummary: 'How cloud transcription works',
     privacyBody:
       'When an API key is configured, recorded audio may be sent to a cloud transcription API for processing. Use local controls and provider settings to manage this behavior.',
-    account: 'Account',
-    signedInAs: 'Signed in as',
-    logout: 'Logout',
-    signInSubtitle: 'Sign in to open ReadMe transcription.',
-    email: 'Email',
-    password: 'Password',
-    login: 'Login',
-    loggingIn: 'Logging in...',
-    mockLogin: 'Mock Login',
     systemDefaultMic: 'System default microphone',
   },
   zh: {
@@ -370,15 +352,6 @@ const UI_COPY = {
     privacy: '隐私',
     privacySummary: '云端转录说明',
     privacyBody: '配置 API Key 后，录制音频可能会发送到云端转录 API 进行处理。你可以通过本地设置和服务配置控制该行为。',
-    account: '账号',
-    signedInAs: '当前登录',
-    logout: '退出登录',
-    signInSubtitle: '登录后即可使用 ReadMe 转录。',
-    email: '邮箱',
-    password: '密码',
-    login: '登录',
-    loggingIn: '登录中...',
-    mockLogin: '模拟登录',
     systemDefaultMic: '系统默认麦克风',
   },
 } as const;
@@ -391,116 +364,6 @@ function getStorageArea(): ChromeStorageArea | null {
   return chrome.storage.local;
 }
 
-async function readAuthState(): Promise<AuthState | null> {
-  const storage = getStorageArea();
-
-  let localData: string | null = null;
-  try {
-    localData = window.localStorage.getItem(AUTH_STORAGE_KEY);
-  } catch {
-    localData = null;
-  }
-
-  if (!storage) {
-    if (!localData) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(localData) as AuthState;
-    } catch {
-      return null;
-    }
-  }
-
-  return new Promise((resolve) => {
-    storage.get(AUTH_STORAGE_KEY, (items) => {
-      const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
-      if (runtimeError) {
-        resolve(null);
-        return;
-      }
-
-      const storedAuth = (items[AUTH_STORAGE_KEY] as AuthState | undefined) ?? null;
-      if (storedAuth || !localData) {
-        resolve(storedAuth);
-        return;
-      }
-
-      let parsedLocalAuth: AuthState;
-      try {
-        parsedLocalAuth = JSON.parse(localData) as AuthState;
-      } catch {
-        resolve(null);
-        return;
-      }
-
-      storage.set({ [AUTH_STORAGE_KEY]: parsedLocalAuth }, () => {
-        const setRuntimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
-        if (setRuntimeError) {
-          resolve(parsedLocalAuth);
-          return;
-        }
-
-        try {
-          window.localStorage.removeItem(AUTH_STORAGE_KEY);
-        } catch {
-          // no-op: migration cleanup is best effort.
-        }
-
-        resolve(parsedLocalAuth);
-      });
-    });
-  });
-}
-
-async function persistAuthState(auth: AuthState): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    try {
-      storage.set({ [AUTH_STORAGE_KEY]: auth }, () => {
-        const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
-        if (runtimeError) {
-          console.error('Failed to persist auth state:', runtimeError.message);
-        }
-
-        resolve();
-      });
-    } catch (error) {
-      console.error('Failed to persist auth state:', error);
-      resolve();
-    }
-  });
-}
-
-async function clearAuthState(): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    try {
-      storage.remove(AUTH_STORAGE_KEY, () => {
-        const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
-        if (runtimeError) {
-          console.error('Failed to clear auth state:', runtimeError.message);
-        }
-
-        resolve();
-      });
-    } catch (error) {
-      console.error('Failed to clear auth state:', error);
-      resolve();
-    }
-  });
-}
 
 async function readSelectedDeviceId(): Promise<string> {
   const storage = getStorageArea();
@@ -665,10 +528,6 @@ async function queryStateFromOffscreen() {
 }
 
 function App() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>('transcription');
   const [status, setStatus] = useState<AudioStatus>('Idle');
@@ -731,12 +590,6 @@ function App() {
   };
 
   useEffect(() => {
-    readAuthState().then((storedAuth) => {
-      if (storedAuth?.token && storedAuth.email) {
-        setAuth(storedAuth);
-      }
-    });
-
     Promise.all([loadSettings(), getSttDiagnosticsFromRuntime(), readUITheme(), readUILang()]).then(
       ([settings, sttSummary, savedTheme, savedLang]) => {
         setSttStatusLine(`Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}`);
@@ -776,8 +629,6 @@ function App() {
     };
   }, []);
 
-  const apiBaseUrl = useMemo(() => DEFAULT_API_BASE_URL, []);
-
   useEffect(() => {
     if (!transcriptRef.current) {
       return;
@@ -796,7 +647,7 @@ function App() {
   }, [isAudioSourceLocked]);
 
   useEffect(() => {
-    if (!auth || typeof chrome === 'undefined') {
+    if (typeof chrome === 'undefined') {
       return;
     }
 
@@ -869,21 +720,17 @@ function App() {
       disposed = true;
       chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
     };
-  }, [activeView, auth]);
+  }, [activeView]);
 
   useEffect(() => {
-    if (!auth || activeView !== 'notes') {
+    if (activeView !== 'notes') {
       return;
     }
 
     loadNotesSessions();
-  }, [activeView, auth]);
+  }, [activeView]);
 
   useEffect(() => {
-    if (!auth) {
-      return;
-    }
-
     const refreshDevices = async () => {
       try {
         const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -917,7 +764,7 @@ function App() {
     return () => {
       navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
     };
-  }, [auth]);
+  }, []);
 
   const sendControlMessage = async (
     message:
@@ -937,89 +784,6 @@ function App() {
     if (result?.ok === false) {
       throw new Error(result.error ?? 'Unknown runtime error');
     }
-  };
-
-  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (!email.trim() || !password.trim()) {
-      setError('Email and password are required.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Login failed. You can use Mock Login for local UI testing.');
-      }
-
-      const data = (await response.json()) as {
-        accessToken?: string;
-        access_token?: string;
-        user?: { id?: string; email?: string };
-      };
-      const accessToken = data.accessToken ?? data.access_token;
-
-      if (!accessToken) {
-        throw new Error('Login succeeded but no access token was returned.');
-      }
-
-      const nextAuth = {
-        token: accessToken,
-        email,
-        userId: data.user?.id,
-      };
-
-      await persistAuthState(nextAuth);
-      setAuth(nextAuth);
-      setPassword('');
-    } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Unable to login.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleMockLogin = async () => {
-    if (!email.trim()) {
-      setError('Enter an email to continue with mock login.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
-    const nextAuth = {
-      token: DEV_MOCK_TOKEN,
-      email,
-      userId: email,
-    };
-
-    await persistAuthState(nextAuth);
-    setAuth(nextAuth);
-    setPassword('');
-    setIsSubmitting(false);
-  };
-
-  const handleLogout = async () => {
-    await clearAuthState();
-    setAuth(null);
-    setEmail('');
-    setPassword('');
-    setError(null);
-    setStatus('Idle');
-    setActiveView('transcription');
-    setTranscriptText('');
   };
 
   const handleStartListening = async () => {
@@ -1207,9 +971,8 @@ function App() {
     return filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0] ?? null;
   }, [filteredSessions, selectedSessionId]);
 
-  if (auth) {
-    return (
-      <main className="popup" data-theme={uiTheme}>
+  return (
+    <main className="popup" data-theme={uiTheme}>
         <header className="popup__header">
           <div className="popup__brand">
             <h1>{t('appTitle')}</h1>
@@ -1480,65 +1243,11 @@ function App() {
               <summary>{t('privacySummary')}</summary>
               <p className="panel__body">{t('privacyBody')}</p>
             </details>
-
-            <div className="settings-card">
-              <h2>{t('account')}</h2>
-              <p className="panel__body">{t('signedInAs')}: {auth.email}</p>
-              <button className="button button--tertiary settings-link" onClick={() => void handleLogout()} type="button">
-                {t('logout')}
-              </button>
-            </div>
           </section>
         ) : null}
 
         {exportToast ? <p className="toast">{exportToast}</p> : null}
       </main>
-    );
-  }
-
-  return (
-    <main className="popup" data-theme={uiTheme}>
-      <h1>{t('appTitle')}</h1>
-      <p className="subtitle">{t('signInSubtitle')}</p>
-
-      <form className="form" onSubmit={handleLogin}>
-        <label className="form__label" htmlFor="email">
-          {t('email')}
-        </label>
-        <input
-          autoComplete="email"
-          className="form__input"
-          id="email"
-          onChange={(event) => setEmail(event.target.value)}
-          placeholder="you@example.com"
-          type="email"
-          value={email}
-        />
-
-        <label className="form__label" htmlFor="password">
-          {t('password')}
-        </label>
-        <input
-          autoComplete="current-password"
-          className="form__input"
-          id="password"
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="••••••••"
-          type="password"
-          value={password}
-        />
-
-        {error && <p className="error">{error}</p>}
-
-        <button className="button" disabled={isSubmitting} type="submit">
-          {isSubmitting ? t('loggingIn') : t('login')}
-        </button>
-
-        <button className="button button--secondary" disabled={isSubmitting} onClick={handleMockLogin} type="button">
-          {t('mockLogin')}
-        </button>
-      </form>
-    </main>
   );
 }
 
