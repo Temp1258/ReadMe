@@ -63,6 +63,7 @@ const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
 const MAX_SEGMENT_BYTES = 19 * 1024 * 1024;
 const HARD_MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
+const TARGET_SEGMENT_DURATION_MS = 20 * 60 * 1000;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -628,6 +629,15 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     return -1;
   };
 
+  const getProjectedSegmentDurationMs = (nextChunkEndOffsetMs: number): number => {
+    if (currentSegmentChunks.length === 0) {
+      return 0;
+    }
+
+    const segmentStartOffsetMs = currentSegmentChunks[0].startOffsetMs;
+    return Math.max(0, nextChunkEndOffsetMs - segmentStartOffsetMs);
+  };
+
   await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
     if (!firstChunkSeen) {
       firstChunkSeen = true;
@@ -644,8 +654,16 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       const currentSegmentIndex = segmentBlobs.length + 1;
       const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
       const projectedBytes = currentSegmentBytes + reservedHeaderBytes + chunk.bytes;
+      const projectedDurationMs = getProjectedSegmentDurationMs(chunkEndOffsetMs);
+      const exceedsDurationTarget =
+        currentSegmentBytes > 0 && projectedDurationMs >= TARGET_SEGMENT_DURATION_MS;
       const exceedsSoftTarget = currentSegmentBytes > 0 && projectedBytes > MAX_SEGMENT_BYTES;
       const exceedsHardTarget = currentSegmentBytes > 0 && projectedBytes > HARD_MAX_SEGMENT_BYTES;
+
+      if (exceedsDurationTarget) {
+        await flushSegment();
+        continue;
+      }
 
       if (exceedsSoftTarget && chunkStartsWithCluster) {
         await flushSegment();
@@ -664,9 +682,11 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
           continue;
         }
 
-        throw new Error(
-          `Unable to split safely before chunk ${chunk.seq}: no cluster-aligned boundary exists in current segment before hard max ${HARD_MAX_SEGMENT_BYTES} bytes.`,
+        console.info(
+          `[segmentation] hard-max fallback split before chunk=${chunk.seq} without cluster-aligned boundary hardMaxBytes=${HARD_MAX_SEGMENT_BYTES}`,
         );
+        await flushSegment();
+        continue;
       }
 
       break;
