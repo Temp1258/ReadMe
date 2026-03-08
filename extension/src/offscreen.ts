@@ -62,6 +62,7 @@ type GetSttSettingsResponse =
 const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
 const MAX_SEGMENT_BYTES = 19 * 1024 * 1024;
+const HARD_MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -491,6 +492,11 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     return -1;
   };
 
+  const findClusterOffset = async (blob: Blob): Promise<number> => {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return findMarkerIndex(bytes, CLUSTER_MARKER);
+  };
+
   const bytesToHex = (buf: Uint8Array): string => Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join(' ');
 
   const startsWithMarker = (buf: Uint8Array, marker: readonly number[]): boolean => {
@@ -562,6 +568,7 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
 
     const segIndex = segmentBlobs.length + 1;
     const firstChunkFirst4 = new Uint8Array(await currentSegmentBlobs[0].slice(0, 4).arrayBuffer());
+    const firstChunkClusterOffset = await findClusterOffset(currentSegmentBlobs[0]);
     const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
     const shouldPrependHeader = segIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
 
@@ -583,7 +590,21 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       segmentParts.push(new Blob([stableHeaderArrayBuffer]));
       headerPrepended = true;
     }
-    for (const blobPart of currentSegmentBlobs) {
+    for (const [blobIndex, blobPart] of currentSegmentBlobs.entries()) {
+      if (
+        segIndex > 1 &&
+        blobIndex === 0 &&
+        shouldPrependHeader &&
+        firstChunkClusterOffset > 0 &&
+        firstChunkClusterOffset < blobPart.size
+      ) {
+        segmentParts.push(blobPart.slice(firstChunkClusterOffset));
+        console.info(
+          `[segmentation] trimmed seg=${segIndex} firstChunkLeadingBytes=${firstChunkClusterOffset} to align cluster boundary`,
+        );
+        continue;
+      }
+
       segmentParts.push(blobPart);
     }
 
@@ -597,9 +618,9 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       headerPrepended = true;
     }
 
-    if (segmentBlob.size > MAX_SEGMENT_BYTES) {
+    if (segmentBlob.size > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
@@ -621,22 +642,30 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
 
     const currentSegmentIndex = segmentBlobs.length + 1;
     const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+    const chunkClusterOffset = await findClusterOffset(chunk.blob);
+    const chunkStartsWithCluster = chunkClusterOffset === 0;
 
-    if (chunk.bytes + reservedHeaderBytes > MAX_SEGMENT_BYTES) {
+    if (chunk.bytes + reservedHeaderBytes > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${reservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${reservedHeaderBytes} bytes within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
+    const exceedsSoftTarget = currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES;
+    if (exceedsSoftTarget && chunkStartsWithCluster) {
       await flushSegment();
     }
 
-    const nextSegmentIndex = segmentBlobs.length + 1;
-    const nextReservedHeaderBytes = nextSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
-    if (chunk.bytes + nextReservedHeaderBytes > MAX_SEGMENT_BYTES) {
+    if (
+      currentSegmentBytes > 0 &&
+      currentSegmentBytes + reservedHeaderBytes + chunk.bytes > HARD_MAX_SEGMENT_BYTES
+    ) {
+      await flushSegment();
+    }
+
+    if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${nextReservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes without creating an invalid boundary.`,
       );
     }
 
