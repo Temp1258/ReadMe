@@ -455,7 +455,14 @@ async function transcribeSegmentBlob(
 
 async function transcribeRecordingInSegments(recordingSession: RecordingSessionRecord, mimeType: string): Promise<void> {
   let totalSegments = 0;
-  let currentSegmentBlobs: Blob[] = [];
+  let currentSegmentChunks: Array<{
+    blob: Blob;
+    bytes: number;
+    seq: number;
+    startsWithCluster: boolean;
+    startOffsetMs: number;
+    endOffsetMs: number;
+  }> = [];
   let currentSegmentBytes = 0;
   const segmentBlobs: Array<{
     blob: Blob;
@@ -470,8 +477,7 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let headerMarkerIndex = -1;
   let headerScanLen = 0;
   let extractedHeaderLen = 0;
-  let currentSegmentStartSeq: number | null = null;
-  let currentSegmentEndSeq: number | null = null;
+  let previousChunkEndOffsetMs = 0;
 
   const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
   const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3] as const;
@@ -490,11 +496,6 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     }
 
     return -1;
-  };
-
-  const findClusterOffset = async (blob: Blob): Promise<number> => {
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    return findMarkerIndex(bytes, CLUSTER_MARKER);
   };
 
   const bytesToHex = (buf: Uint8Array): string => Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join(' ');
@@ -557,18 +558,17 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     console.info(`[segmentation] header extracted bytes=${headerLength} markerIndex=${markerIndex} scanLen=${scanLen}`);
   };
 
-  const flushSegment = async (): Promise<void> => {
-    if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
+  const flushSegment = async (flushChunkCount: number = currentSegmentChunks.length): Promise<void> => {
+    if (flushChunkCount <= 0 || currentSegmentChunks.length === 0 || currentSegmentBytes === 0) {
       return;
     }
 
-    if (currentSegmentStartSeq === null || currentSegmentEndSeq === null) {
-      throw new Error('Segment boundary metadata is missing chunk sequence numbers.');
-    }
+    const segmentChunks = currentSegmentChunks.slice(0, flushChunkCount);
+    const remainingChunks = currentSegmentChunks.slice(flushChunkCount);
+    const segmentBytesTotal = segmentChunks.reduce((sum, chunk) => sum + chunk.bytes, 0);
 
     const segIndex = segmentBlobs.length + 1;
-    const firstChunkFirst4 = new Uint8Array(await currentSegmentBlobs[0].slice(0, 4).arrayBuffer());
-    const firstChunkClusterOffset = await findClusterOffset(currentSegmentBlobs[0]);
+    const firstChunkFirst4 = new Uint8Array(await segmentChunks[0].blob.slice(0, 4).arrayBuffer());
     const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
     const shouldPrependHeader = segIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
 
@@ -590,22 +590,8 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       segmentParts.push(new Blob([stableHeaderArrayBuffer]));
       headerPrepended = true;
     }
-    for (const [blobIndex, blobPart] of currentSegmentBlobs.entries()) {
-      if (
-        segIndex > 1 &&
-        blobIndex === 0 &&
-        shouldPrependHeader &&
-        firstChunkClusterOffset > 0 &&
-        firstChunkClusterOffset < blobPart.size
-      ) {
-        segmentParts.push(blobPart.slice(firstChunkClusterOffset));
-        console.info(
-          `[segmentation] trimmed seg=${segIndex} firstChunkLeadingBytes=${firstChunkClusterOffset} to align cluster boundary`,
-        );
-        continue;
-      }
-
-      segmentParts.push(blobPart);
+    for (const chunk of segmentChunks) {
+      segmentParts.push(chunk.blob);
     }
 
     let segmentBlob = new Blob(segmentParts, { type: mimeType || 'audio/webm' });
@@ -624,14 +610,22 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       );
     }
 
-    const startOffsetMs = Math.max(0, (currentSegmentStartSeq - 1) * recordingSession.timesliceMs);
-    const endOffsetMs = Math.max(startOffsetMs, currentSegmentEndSeq * recordingSession.timesliceMs);
+    const startOffsetMs = segmentChunks[0].startOffsetMs;
+    const endOffsetMs = Math.max(startOffsetMs, segmentChunks[segmentChunks.length - 1].endOffsetMs);
 
     segmentBlobs.push({ blob: segmentBlob, headerPrepended, startOffsetMs, endOffsetMs });
-    currentSegmentBlobs = [];
-    currentSegmentBytes = 0;
-    currentSegmentStartSeq = null;
-    currentSegmentEndSeq = null;
+    currentSegmentChunks = remainingChunks;
+    currentSegmentBytes = currentSegmentBytes - segmentBytesTotal;
+  };
+
+  const findLastClusterBoundaryIndex = (): number => {
+    for (let idx = currentSegmentChunks.length - 1; idx > 0; idx -= 1) {
+      if (currentSegmentChunks[idx].startsWithCluster) {
+        return idx;
+      }
+    }
+
+    return -1;
   };
 
   await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
@@ -640,41 +634,62 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       await tryExtractWebmHeaderBytes(chunk.blob);
     }
 
-    const currentSegmentIndex = segmentBlobs.length + 1;
-    const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
-    const chunkClusterOffset = await findClusterOffset(chunk.blob);
-    const chunkStartsWithCluster = chunkClusterOffset === 0;
+    const chunkFirst4 = new Uint8Array(await chunk.blob.slice(0, 4).arrayBuffer());
+    const chunkStartsWithCluster = startsWithMarker(chunkFirst4, CLUSTER_MARKER);
+    const chunkEndOffsetMs = Math.max(0, chunk.createdAt - recordingSession.startTime);
+    const chunkStartOffsetMs = Math.max(0, Math.min(previousChunkEndOffsetMs, chunkEndOffsetMs));
+    previousChunkEndOffsetMs = chunkEndOffsetMs;
 
-    if (chunk.bytes + reservedHeaderBytes > HARD_MAX_SEGMENT_BYTES) {
+    while (true) {
+      const currentSegmentIndex = segmentBlobs.length + 1;
+      const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+      const projectedBytes = currentSegmentBytes + reservedHeaderBytes + chunk.bytes;
+      const exceedsSoftTarget = currentSegmentBytes > 0 && projectedBytes > MAX_SEGMENT_BYTES;
+      const exceedsHardTarget = currentSegmentBytes > 0 && projectedBytes > HARD_MAX_SEGMENT_BYTES;
+
+      if (exceedsSoftTarget && chunkStartsWithCluster) {
+        await flushSegment();
+        continue;
+      }
+
+      if (exceedsHardTarget) {
+        if (chunkStartsWithCluster) {
+          await flushSegment();
+          continue;
+        }
+
+        const splitIndex = findLastClusterBoundaryIndex();
+        if (splitIndex > 0) {
+          await flushSegment(splitIndex);
+          continue;
+        }
+
+        throw new Error(
+          `Unable to split safely before chunk ${chunk.seq}: no cluster-aligned boundary exists in current segment before hard max ${HARD_MAX_SEGMENT_BYTES} bytes.`,
+        );
+      }
+
+      break;
+    }
+
+    const postSplitSegmentIndex = segmentBlobs.length + 1;
+    const postSplitReservedHeaderBytes = postSplitSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+
+    if (chunk.bytes + postSplitReservedHeaderBytes > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${reservedHeaderBytes} bytes within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${postSplitReservedHeaderBytes} bytes within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    const exceedsSoftTarget = currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES;
-    if (exceedsSoftTarget && chunkStartsWithCluster) {
-      await flushSegment();
-    }
-
-    if (
-      currentSegmentBytes > 0 &&
-      currentSegmentBytes + reservedHeaderBytes + chunk.bytes > HARD_MAX_SEGMENT_BYTES
-    ) {
-      await flushSegment();
-    }
-
-    if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > HARD_MAX_SEGMENT_BYTES) {
-      throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes without creating an invalid boundary.`,
-      );
-    }
-
-    currentSegmentBlobs.push(chunk.blob);
+    currentSegmentChunks.push({
+      blob: chunk.blob,
+      bytes: chunk.bytes,
+      seq: chunk.seq,
+      startsWithCluster: chunkStartsWithCluster,
+      startOffsetMs: chunkStartOffsetMs,
+      endOffsetMs: chunkEndOffsetMs,
+    });
     currentSegmentBytes += chunk.bytes;
-    if (currentSegmentStartSeq === null) {
-      currentSegmentStartSeq = chunk.seq;
-    }
-    currentSegmentEndSeq = chunk.seq;
   });
 
   await flushSegment();
