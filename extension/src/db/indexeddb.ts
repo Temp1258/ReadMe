@@ -5,6 +5,8 @@ export type SessionSegment = {
   idx: number;
   ts: number;
   text: string;
+  startOffsetMs?: number;
+  endOffsetMs?: number;
 };
 
 export type SessionRecord = {
@@ -147,7 +149,11 @@ export async function createSession(input: { id: string; startedAt: number; sour
   return session;
 }
 
-export async function appendSessionSegment(sessionId: string, text: string): Promise<SessionRecord | null> {
+export async function appendSessionSegment(
+  sessionId: string,
+  text: string,
+  timing?: { startOffsetMs?: number; endOffsetMs?: number },
+): Promise<SessionRecord | null> {
   const normalized = text.trim();
   if (!normalized) {
     return getSession(sessionId);
@@ -163,6 +169,8 @@ export async function appendSessionSegment(sessionId: string, text: string): Pro
     idx: nextIdx,
     ts: Date.now(),
     text: normalized,
+    startOffsetMs: timing?.startOffsetMs,
+    endOffsetMs: timing?.endOffsetMs,
   };
 
   const updated: SessionRecord = {

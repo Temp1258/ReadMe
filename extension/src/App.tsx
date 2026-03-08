@@ -114,6 +114,13 @@ function formatExportDuration(startedAt: number, endedAt?: number): string {
   return human ? `${human} (${totalMs}ms)` : `${totalMs}ms`;
 }
 
+function formatOffsetLabel(offsetMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(offsetMs / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 function getExportFileName(session: SessionRecord, extension: string): string {
   const safeSource = session.source.replace(/[^a-z0-9_-]/gi, '_');
   const timestamp = formatFileTimestamp(session.startedAt);
@@ -137,7 +144,15 @@ function buildTxtExport(session: SessionRecord): string {
   const segments =
     session.segments.length === 0
       ? '(none)'
-      : session.segments.map((segment) => `#${segment.idx} | ${segment.ts} | ${segment.text}`).join('\n');
+      : session.segments
+          .map((segment) => {
+            const hasTiming = typeof segment.startOffsetMs === 'number' && typeof segment.endOffsetMs === 'number';
+            const timingLabel = hasTiming
+              ? `${formatOffsetLabel(segment.startOffsetMs ?? 0)} - ${formatOffsetLabel(segment.endOffsetMs ?? 0)}`
+              : String(segment.ts);
+            return `[Segment ${segment.idx} | ${timingLabel}]\n${segment.text}`;
+          })
+          .join('\n\n');
 
   return [`Session Metadata`, metadata, '', 'Transcript', transcript, '', 'Segments', segments].join('\n');
 }

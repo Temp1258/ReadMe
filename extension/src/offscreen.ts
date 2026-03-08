@@ -338,14 +338,18 @@ function chooseRecorderMimeType(): string | undefined {
   return undefined;
 }
 
-async function appendTranscript(seq: number, text: string): Promise<void> {
+async function appendTranscript(
+  seq: number,
+  text: string,
+  timing?: { startOffsetMs?: number; endOffsetMs?: number },
+): Promise<void> {
   const normalized = text.trim();
   if (!normalized) {
     return;
   }
 
   if (state.activeSessionId) {
-    const persisted = await appendSessionSegment(state.activeSessionId, normalized);
+    const persisted = await appendSessionSegment(state.activeSessionId, normalized, timing);
     state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${normalized}` : normalized);
   } else {
     state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
@@ -369,7 +373,12 @@ function buildSegmentErrorMessage(segmentIndex: number, segmentBytes: number, er
   return `Segment ${segmentIndex} failed with status ${error.status}.`;
 }
 
-async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, totalSegments: number): Promise<void> {
+async function transcribeSegmentBlob(
+  segmentBlob: Blob,
+  segmentIndex: number,
+  totalSegments: number,
+  timing?: { startOffsetMs?: number; endOffsetMs?: number },
+): Promise<void> {
   const apiKey = inMemoryApiKey;
 
   if (segmentBlob.size === 0 || segmentBlob.size < CHUNK_MIN_BYTES) {
@@ -381,7 +390,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
   console.info(`[transcribe-segment] seg=${segmentIndex} size=${segmentBlob.size} type=${segmentBlob.type || '(empty)'}`);
 
   if (state.useMockTranscription) {
-    await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`);
+    await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`, timing);
     return;
   }
 
@@ -399,7 +408,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
         fileName: filename,
         maxRetries: 1,
       });
-      await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`);
+      await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`, timing);
       return;
     } catch (error) {
       const isFormatError =
@@ -421,10 +430,10 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
             maxRetries: 1,
           });
           console.info(`fallback success seg ${segmentIndex}`);
-          await appendTranscript(segmentIndex, retryText || `[empty] segment ${segmentIndex}`);
+          await appendTranscript(segmentIndex, retryText || `[empty] segment ${segmentIndex}`, timing);
           return;
         } catch {
-          await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`);
+          await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`, timing);
           return;
         }
       }
@@ -447,7 +456,12 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let totalSegments = 0;
   let currentSegmentBlobs: Blob[] = [];
   let currentSegmentBytes = 0;
-  const segmentBlobs: Array<{ blob: Blob; headerPrepended: boolean }> = [];
+  const segmentBlobs: Array<{
+    blob: Blob;
+    headerPrepended: boolean;
+    startOffsetMs: number;
+    endOffsetMs: number;
+  }> = [];
   let headerBytes: Uint8Array | null = null;
   let headerExtractionLogged = false;
   let seg2NoHeaderLogged = false;
@@ -455,6 +469,8 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let headerMarkerIndex = -1;
   let headerScanLen = 0;
   let extractedHeaderLen = 0;
+  let currentSegmentStartSeq: number | null = null;
+  let currentSegmentEndSeq: number | null = null;
 
   const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
   const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3] as const;
@@ -540,8 +556,14 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       return;
     }
 
+    if (currentSegmentStartSeq === null || currentSegmentEndSeq === null) {
+      throw new Error('Segment boundary metadata is missing chunk sequence numbers.');
+    }
+
     const segIndex = segmentBlobs.length + 1;
-    const shouldPrependHeader = segIndex > 1 && headerBytes !== null;
+    const firstChunkFirst4 = new Uint8Array(await currentSegmentBlobs[0].slice(0, 4).arrayBuffer());
+    const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
+    const shouldPrependHeader = segIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
 
     if (segIndex === 1 && shouldPrependHeader) {
       throw new Error('Invariant violation: seg1 must not prepend header bytes.');
@@ -581,9 +603,14 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       );
     }
 
-    segmentBlobs.push({ blob: segmentBlob, headerPrepended });
+    const startOffsetMs = Math.max(0, (currentSegmentStartSeq - 1) * recordingSession.timesliceMs);
+    const endOffsetMs = Math.max(startOffsetMs, currentSegmentEndSeq * recordingSession.timesliceMs);
+
+    segmentBlobs.push({ blob: segmentBlob, headerPrepended, startOffsetMs, endOffsetMs });
     currentSegmentBlobs = [];
     currentSegmentBytes = 0;
+    currentSegmentStartSeq = null;
+    currentSegmentEndSeq = null;
   };
 
   await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
@@ -615,6 +642,10 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
 
     currentSegmentBlobs.push(chunk.blob);
     currentSegmentBytes += chunk.bytes;
+    if (currentSegmentStartSeq === null) {
+      currentSegmentStartSeq = chunk.seq;
+    }
+    currentSegmentEndSeq = chunk.seq;
   });
 
   await flushSegment();
@@ -634,7 +665,10 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     console.info(
       `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
     );
-    await transcribeSegmentBlob(segment.blob, segNumber, totalSegments);
+    await transcribeSegmentBlob(segment.blob, segNumber, totalSegments, {
+      startOffsetMs: segment.startOffsetMs,
+      endOffsetMs: segment.endOffsetMs,
+    });
   }
 }
 
