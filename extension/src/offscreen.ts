@@ -62,6 +62,11 @@ type GetSttSettingsResponse =
 const CHUNK_TIMESLICE_MS = 30_000;
 const CHUNK_MIN_BYTES = 1_024;
 const MAX_SEGMENT_BYTES = 19 * 1024 * 1024;
+const HARD_MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
+const TARGET_SEGMENT_DURATION_MS = 20 * 60 * 1000;
+const SEGMENT_TRANSCRIPT_OVERLAP_MS = 5_000;
+const MIN_OVERLAP_DEDUP_WORDS = 3;
+const MAX_OVERLAP_DEDUP_WORDS = 40;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -338,14 +343,55 @@ function chooseRecorderMimeType(): string | undefined {
   return undefined;
 }
 
-async function appendTranscript(seq: number, text: string): Promise<void> {
-  const normalized = text.trim();
+async function appendTranscript(
+  seq: number,
+  text: string,
+  timing?: { startOffsetMs?: number; endOffsetMs?: number },
+): Promise<void> {
+  const normalizedIncoming = text.trim();
+  if (!normalizedIncoming) {
+    return;
+  }
+
+  const normalizeWord = (word: string): string => word.toLowerCase().replace(/(^[^a-z0-9']+|[^a-z0-9']+$)/gi, '');
+
+  const removeOverlapPrefix = (existingTranscript: string, incomingText: string): string => {
+    const existingWords = existingTranscript.trim().split(/\s+/).filter(Boolean);
+    const incomingWords = incomingText.trim().split(/\s+/).filter(Boolean);
+
+    if (existingWords.length === 0 || incomingWords.length === 0) {
+      return incomingText.trim();
+    }
+
+    const existingTailWords = existingWords
+      .slice(-MAX_OVERLAP_DEDUP_WORDS)
+      .map((word) => normalizeWord(word))
+      .filter(Boolean);
+    const incomingNormalizedWords = incomingWords.map((word) => normalizeWord(word)).filter(Boolean);
+
+    const maxOverlap = Math.min(existingTailWords.length, incomingNormalizedWords.length, MAX_OVERLAP_DEDUP_WORDS);
+
+    for (let overlapSize = maxOverlap; overlapSize >= MIN_OVERLAP_DEDUP_WORDS; overlapSize -= 1) {
+      const existingSuffix = existingTailWords.slice(-overlapSize);
+      const incomingPrefix = incomingNormalizedWords.slice(0, overlapSize);
+      const isMatch = existingSuffix.every((word, idx) => word === incomingPrefix[idx]);
+
+      if (isMatch) {
+        const dedupedWords = incomingWords.slice(overlapSize).join(' ').trim();
+        return dedupedWords;
+      }
+    }
+
+    return incomingText.trim();
+  };
+
+  const normalized = removeOverlapPrefix(state.transcript, normalizedIncoming);
   if (!normalized) {
     return;
   }
 
   if (state.activeSessionId) {
-    const persisted = await appendSessionSegment(state.activeSessionId, normalized);
+    const persisted = await appendSessionSegment(state.activeSessionId, normalized, timing);
     state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${normalized}` : normalized);
   } else {
     state.transcript = state.transcript ? `${state.transcript}\n${normalized}` : normalized;
@@ -369,7 +415,12 @@ function buildSegmentErrorMessage(segmentIndex: number, segmentBytes: number, er
   return `Segment ${segmentIndex} failed with status ${error.status}.`;
 }
 
-async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, totalSegments: number): Promise<void> {
+async function transcribeSegmentBlob(
+  segmentBlob: Blob,
+  segmentIndex: number,
+  totalSegments: number,
+  timing?: { startOffsetMs?: number; endOffsetMs?: number },
+): Promise<void> {
   const apiKey = inMemoryApiKey;
 
   if (segmentBlob.size === 0 || segmentBlob.size < CHUNK_MIN_BYTES) {
@@ -381,7 +432,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
   console.info(`[transcribe-segment] seg=${segmentIndex} size=${segmentBlob.size} type=${segmentBlob.type || '(empty)'}`);
 
   if (state.useMockTranscription) {
-    await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`);
+    await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`, timing);
     return;
   }
 
@@ -399,7 +450,7 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
         fileName: filename,
         maxRetries: 1,
       });
-      await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`);
+      await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`, timing);
       return;
     } catch (error) {
       const isFormatError =
@@ -421,10 +472,10 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
             maxRetries: 1,
           });
           console.info(`fallback success seg ${segmentIndex}`);
-          await appendTranscript(segmentIndex, retryText || `[empty] segment ${segmentIndex}`);
+          await appendTranscript(segmentIndex, retryText || `[empty] segment ${segmentIndex}`, timing);
           return;
         } catch {
-          await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`);
+          await appendTranscript(segmentIndex, `[skipped] segment ${segmentIndex} invalid file format`, timing);
           return;
         }
       }
@@ -445,9 +496,26 @@ async function transcribeSegmentBlob(segmentBlob: Blob, segmentIndex: number, to
 
 async function transcribeRecordingInSegments(recordingSession: RecordingSessionRecord, mimeType: string): Promise<void> {
   let totalSegments = 0;
-  let currentSegmentBlobs: Blob[] = [];
+  let currentSegmentChunks: Array<{
+    blob: Blob;
+    bytes: number;
+    seq: number;
+    startsWithCluster: boolean;
+    startOffsetMs: number;
+    endOffsetMs: number;
+  }> = [];
   let currentSegmentBytes = 0;
-  const segmentBlobs: Array<{ blob: Blob; headerPrepended: boolean }> = [];
+  const segmentBlobs: Array<{
+    blob: Blob;
+    headerPrepended: boolean;
+    startOffsetMs: number;
+    endOffsetMs: number;
+    chunks: Array<{
+      blob: Blob;
+      startOffsetMs: number;
+      endOffsetMs: number;
+    }>;
+  }> = [];
   let headerBytes: Uint8Array | null = null;
   let headerExtractionLogged = false;
   let seg2NoHeaderLogged = false;
@@ -455,6 +523,7 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   let headerMarkerIndex = -1;
   let headerScanLen = 0;
   let extractedHeaderLen = 0;
+  let previousChunkEndOffsetMs = 0;
 
   const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
   const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3] as const;
@@ -535,13 +604,19 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     console.info(`[segmentation] header extracted bytes=${headerLength} markerIndex=${markerIndex} scanLen=${scanLen}`);
   };
 
-  const flushSegment = async (): Promise<void> => {
-    if (currentSegmentBlobs.length === 0 || currentSegmentBytes === 0) {
+  const flushSegment = async (flushChunkCount: number = currentSegmentChunks.length): Promise<void> => {
+    if (flushChunkCount <= 0 || currentSegmentChunks.length === 0 || currentSegmentBytes === 0) {
       return;
     }
 
+    const segmentChunks = currentSegmentChunks.slice(0, flushChunkCount);
+    const remainingChunks = currentSegmentChunks.slice(flushChunkCount);
+    const segmentBytesTotal = segmentChunks.reduce((sum, chunk) => sum + chunk.bytes, 0);
+
     const segIndex = segmentBlobs.length + 1;
-    const shouldPrependHeader = segIndex > 1 && headerBytes !== null;
+    const firstChunkFirst4 = new Uint8Array(await segmentChunks[0].blob.slice(0, 4).arrayBuffer());
+    const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
+    const shouldPrependHeader = segIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
 
     if (segIndex === 1 && shouldPrependHeader) {
       throw new Error('Invariant violation: seg1 must not prepend header bytes.');
@@ -561,8 +636,8 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       segmentParts.push(new Blob([stableHeaderArrayBuffer]));
       headerPrepended = true;
     }
-    for (const blobPart of currentSegmentBlobs) {
-      segmentParts.push(blobPart);
+    for (const chunk of segmentChunks) {
+      segmentParts.push(chunk.blob);
     }
 
     let segmentBlob = new Blob(segmentParts, { type: mimeType || 'audio/webm' });
@@ -575,15 +650,47 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       headerPrepended = true;
     }
 
-    if (segmentBlob.size > MAX_SEGMENT_BYTES) {
+    if (segmentBlob.size > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Segment ${segIndex} is ${segmentBlob.size} bytes, exceeding hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    segmentBlobs.push({ blob: segmentBlob, headerPrepended });
-    currentSegmentBlobs = [];
-    currentSegmentBytes = 0;
+    const startOffsetMs = segmentChunks[0].startOffsetMs;
+    const endOffsetMs = Math.max(startOffsetMs, segmentChunks[segmentChunks.length - 1].endOffsetMs);
+
+    segmentBlobs.push({
+      blob: segmentBlob,
+      headerPrepended,
+      startOffsetMs,
+      endOffsetMs,
+      chunks: segmentChunks.map((chunk) => ({
+        blob: chunk.blob,
+        startOffsetMs: chunk.startOffsetMs,
+        endOffsetMs: chunk.endOffsetMs,
+      })),
+    });
+    currentSegmentChunks = remainingChunks;
+    currentSegmentBytes = currentSegmentBytes - segmentBytesTotal;
+  };
+
+  const findLastClusterBoundaryIndex = (): number => {
+    for (let idx = currentSegmentChunks.length - 1; idx > 0; idx -= 1) {
+      if (currentSegmentChunks[idx].startsWithCluster) {
+        return idx;
+      }
+    }
+
+    return -1;
+  };
+
+  const getProjectedSegmentDurationMs = (nextChunkEndOffsetMs: number): number => {
+    if (currentSegmentChunks.length === 0) {
+      return 0;
+    }
+
+    const segmentStartOffsetMs = currentSegmentChunks[0].startOffsetMs;
+    return Math.max(0, nextChunkEndOffsetMs - segmentStartOffsetMs);
   };
 
   await streamRecordingChunksBySession(recordingSession.sessionId, async (chunk) => {
@@ -592,37 +699,160 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
       await tryExtractWebmHeaderBytes(chunk.blob);
     }
 
-    const currentSegmentIndex = segmentBlobs.length + 1;
-    const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+    const chunkFirst4 = new Uint8Array(await chunk.blob.slice(0, 4).arrayBuffer());
+    const chunkStartsWithCluster = startsWithMarker(chunkFirst4, CLUSTER_MARKER);
+    const chunkEndOffsetMs = Math.max(0, chunk.createdAt - recordingSession.startTime);
+    const chunkStartOffsetMs = Math.max(0, Math.min(previousChunkEndOffsetMs, chunkEndOffsetMs));
+    previousChunkEndOffsetMs = chunkEndOffsetMs;
 
-    if (chunk.bytes + reservedHeaderBytes > MAX_SEGMENT_BYTES) {
+    while (true) {
+      const currentSegmentIndex = segmentBlobs.length + 1;
+      const reservedHeaderBytes = currentSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+      const projectedBytes = currentSegmentBytes + reservedHeaderBytes + chunk.bytes;
+      const projectedDurationMs = getProjectedSegmentDurationMs(chunkEndOffsetMs);
+      const exceedsDurationTarget =
+        currentSegmentBytes > 0 && projectedDurationMs >= TARGET_SEGMENT_DURATION_MS;
+      const exceedsSoftTarget = currentSegmentBytes > 0 && projectedBytes > MAX_SEGMENT_BYTES;
+      const exceedsHardTarget = currentSegmentBytes > 0 && projectedBytes > HARD_MAX_SEGMENT_BYTES;
+
+      if (exceedsDurationTarget) {
+        await flushSegment();
+        continue;
+      }
+
+      if (exceedsSoftTarget && chunkStartsWithCluster) {
+        await flushSegment();
+        continue;
+      }
+
+      if (exceedsHardTarget) {
+        if (chunkStartsWithCluster) {
+          await flushSegment();
+          continue;
+        }
+
+        const splitIndex = findLastClusterBoundaryIndex();
+        if (splitIndex > 0) {
+          await flushSegment(splitIndex);
+          continue;
+        }
+
+        console.info(
+          `[segmentation] hard-max fallback split before chunk=${chunk.seq} without cluster-aligned boundary hardMaxBytes=${HARD_MAX_SEGMENT_BYTES}`,
+        );
+        await flushSegment();
+        continue;
+      }
+
+      break;
+    }
+
+    const postSplitSegmentIndex = segmentBlobs.length + 1;
+    const postSplitReservedHeaderBytes = postSplitSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
+
+    if (chunk.bytes + postSplitReservedHeaderBytes > HARD_MAX_SEGMENT_BYTES) {
       throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${reservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
+        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${postSplitReservedHeaderBytes} bytes within hard max segment size ${HARD_MAX_SEGMENT_BYTES} bytes.`,
       );
     }
 
-    if (currentSegmentBytes > 0 && currentSegmentBytes + reservedHeaderBytes + chunk.bytes > MAX_SEGMENT_BYTES) {
-      await flushSegment();
-    }
-
-    const nextSegmentIndex = segmentBlobs.length + 1;
-    const nextReservedHeaderBytes = nextSegmentIndex > 1 && headerBytes ? headerBytes.byteLength : 0;
-    if (chunk.bytes + nextReservedHeaderBytes > MAX_SEGMENT_BYTES) {
-      throw new Error(
-        `Chunk ${chunk.seq} is ${chunk.bytes} bytes and cannot fit with required header reservation ${nextReservedHeaderBytes} bytes within max segment size ${MAX_SEGMENT_BYTES} bytes.`,
-      );
-    }
-
-    currentSegmentBlobs.push(chunk.blob);
+    currentSegmentChunks.push({
+      blob: chunk.blob,
+      bytes: chunk.bytes,
+      seq: chunk.seq,
+      startsWithCluster: chunkStartsWithCluster,
+      startOffsetMs: chunkStartOffsetMs,
+      endOffsetMs: chunkEndOffsetMs,
+    });
     currentSegmentBytes += chunk.bytes;
   });
 
   await flushSegment();
   totalSegments = segmentBlobs.length;
 
+  const buildSegmentBlobFromChunks = async (
+    chunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }>,
+    segmentIndex: number,
+  ): Promise<{ blob: Blob; headerPrepended: boolean }> => {
+    if (chunks.length === 0) {
+      return { blob: new Blob([], { type: mimeType || 'audio/webm' }), headerPrepended: false };
+    }
+
+    const firstChunkFirst4 = new Uint8Array(await chunks[0].blob.slice(0, 4).arrayBuffer());
+    const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
+    const shouldPrependHeader = segmentIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
+    const parts: BlobPart[] = [];
+    let headerPrepended = false;
+
+    if (shouldPrependHeader && headerBytes !== null) {
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      parts.push(new Blob([stableHeaderArrayBuffer]));
+      headerPrepended = true;
+    }
+
+    for (const chunk of chunks) {
+      parts.push(chunk.blob);
+    }
+
+    let blob = new Blob(parts, { type: mimeType || 'audio/webm' });
+    const firstBytes = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
+
+    if (!startsWithMarker(firstBytes, EBML_MAGIC) && headerBytes !== null) {
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      blob = new Blob([stableHeaderArrayBuffer, blob], { type: mimeType || 'audio/webm' });
+      headerPrepended = true;
+    }
+
+    return { blob, headerPrepended };
+  };
+
+  const collectOverlapChunks = (
+    previousSegmentChunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }>,
+  ): Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }> => {
+    const overlapChunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }> = [];
+    const overlapStartMs = Math.max(
+      0,
+      previousSegmentChunks[previousSegmentChunks.length - 1].endOffsetMs - SEGMENT_TRANSCRIPT_OVERLAP_MS,
+    );
+
+    for (let idx = previousSegmentChunks.length - 1; idx >= 0; idx -= 1) {
+      const chunk = previousSegmentChunks[idx];
+      overlapChunks.unshift(chunk);
+      if (chunk.startOffsetMs <= overlapStartMs) {
+        break;
+      }
+    }
+
+    return overlapChunks;
+  };
+
   for (const [index, segment] of segmentBlobs.entries()) {
     const segNumber = index + 1;
-    const segFirst64Bytes = new Uint8Array(await segment.blob.slice(0, 64).arrayBuffer());
+    let transcribeBlob = segment.blob;
+    let headerPrependedForUpload = segment.headerPrepended;
+    let overlapAppliedMs = 0;
+
+    if (index > 0) {
+      const previousSegment = segmentBlobs[index - 1];
+      const overlapChunks = collectOverlapChunks(previousSegment.chunks);
+
+      if (overlapChunks.length > 0) {
+        const withOverlap = await buildSegmentBlobFromChunks([...overlapChunks, ...segment.chunks], segNumber);
+        if (withOverlap.blob.size <= HARD_MAX_SEGMENT_BYTES) {
+          transcribeBlob = withOverlap.blob;
+          headerPrependedForUpload = withOverlap.headerPrepended;
+          overlapAppliedMs = Math.max(0, previousSegment.endOffsetMs - overlapChunks[0].startOffsetMs);
+        } else {
+          console.info(
+            `[segmentation] overlap skipped seg=${segNumber} reason=hard-max overlapSize=${withOverlap.blob.size} hardMaxBytes=${HARD_MAX_SEGMENT_BYTES}`,
+          );
+        }
+      }
+    }
+
+    const segFirst64Bytes = new Uint8Array(await transcribeBlob.slice(0, 64).arrayBuffer());
     const segFirst4Hex = bytesToHex(segFirst64Bytes.slice(0, 4));
     const segFirst64Hex = bytesToHex(segFirst64Bytes);
 
@@ -632,9 +862,12 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
         : `segFirst4Hex=${segFirst4Hex}`;
 
     console.info(
-      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
+      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${transcribeBlob.size} type=${transcribeBlob.type || '(empty)'} headerPrepended=${headerPrependedForUpload} overlapMs=${overlapAppliedMs} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
     );
-    await transcribeSegmentBlob(segment.blob, segNumber, totalSegments);
+    await transcribeSegmentBlob(transcribeBlob, segNumber, totalSegments, {
+      startOffsetMs: segment.startOffsetMs,
+      endOffsetMs: segment.endOffsetMs,
+    });
   }
 }
 
