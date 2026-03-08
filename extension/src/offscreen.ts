@@ -64,6 +64,9 @@ const CHUNK_MIN_BYTES = 1_024;
 const MAX_SEGMENT_BYTES = 19 * 1024 * 1024;
 const HARD_MAX_SEGMENT_BYTES = 24 * 1024 * 1024;
 const TARGET_SEGMENT_DURATION_MS = 20 * 60 * 1000;
+const SEGMENT_TRANSCRIPT_OVERLAP_MS = 5_000;
+const MIN_OVERLAP_DEDUP_WORDS = 3;
+const MAX_OVERLAP_DEDUP_WORDS = 40;
 const TRANSCRIBE_MAX_RETRIES = 3;
 const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 
@@ -345,7 +348,44 @@ async function appendTranscript(
   text: string,
   timing?: { startOffsetMs?: number; endOffsetMs?: number },
 ): Promise<void> {
-  const normalized = text.trim();
+  const normalizedIncoming = text.trim();
+  if (!normalizedIncoming) {
+    return;
+  }
+
+  const normalizeWord = (word: string): string => word.toLowerCase().replace(/(^[^a-z0-9']+|[^a-z0-9']+$)/gi, '');
+
+  const removeOverlapPrefix = (existingTranscript: string, incomingText: string): string => {
+    const existingWords = existingTranscript.trim().split(/\s+/).filter(Boolean);
+    const incomingWords = incomingText.trim().split(/\s+/).filter(Boolean);
+
+    if (existingWords.length === 0 || incomingWords.length === 0) {
+      return incomingText.trim();
+    }
+
+    const existingTailWords = existingWords
+      .slice(-MAX_OVERLAP_DEDUP_WORDS)
+      .map((word) => normalizeWord(word))
+      .filter(Boolean);
+    const incomingNormalizedWords = incomingWords.map((word) => normalizeWord(word)).filter(Boolean);
+
+    const maxOverlap = Math.min(existingTailWords.length, incomingNormalizedWords.length, MAX_OVERLAP_DEDUP_WORDS);
+
+    for (let overlapSize = maxOverlap; overlapSize >= MIN_OVERLAP_DEDUP_WORDS; overlapSize -= 1) {
+      const existingSuffix = existingTailWords.slice(-overlapSize);
+      const incomingPrefix = incomingNormalizedWords.slice(0, overlapSize);
+      const isMatch = existingSuffix.every((word, idx) => word === incomingPrefix[idx]);
+
+      if (isMatch) {
+        const dedupedWords = incomingWords.slice(overlapSize).join(' ').trim();
+        return dedupedWords;
+      }
+    }
+
+    return incomingText.trim();
+  };
+
+  const normalized = removeOverlapPrefix(state.transcript, normalizedIncoming);
   if (!normalized) {
     return;
   }
@@ -470,6 +510,11 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     headerPrepended: boolean;
     startOffsetMs: number;
     endOffsetMs: number;
+    chunks: Array<{
+      blob: Blob;
+      startOffsetMs: number;
+      endOffsetMs: number;
+    }>;
   }> = [];
   let headerBytes: Uint8Array | null = null;
   let headerExtractionLogged = false;
@@ -614,7 +659,17 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
     const startOffsetMs = segmentChunks[0].startOffsetMs;
     const endOffsetMs = Math.max(startOffsetMs, segmentChunks[segmentChunks.length - 1].endOffsetMs);
 
-    segmentBlobs.push({ blob: segmentBlob, headerPrepended, startOffsetMs, endOffsetMs });
+    segmentBlobs.push({
+      blob: segmentBlob,
+      headerPrepended,
+      startOffsetMs,
+      endOffsetMs,
+      chunks: segmentChunks.map((chunk) => ({
+        blob: chunk.blob,
+        startOffsetMs: chunk.startOffsetMs,
+        endOffsetMs: chunk.endOffsetMs,
+      })),
+    });
     currentSegmentChunks = remainingChunks;
     currentSegmentBytes = currentSegmentBytes - segmentBytesTotal;
   };
@@ -715,9 +770,89 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
   await flushSegment();
   totalSegments = segmentBlobs.length;
 
+  const buildSegmentBlobFromChunks = async (
+    chunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }>,
+    segmentIndex: number,
+  ): Promise<{ blob: Blob; headerPrepended: boolean }> => {
+    if (chunks.length === 0) {
+      return { blob: new Blob([], { type: mimeType || 'audio/webm' }), headerPrepended: false };
+    }
+
+    const firstChunkFirst4 = new Uint8Array(await chunks[0].blob.slice(0, 4).arrayBuffer());
+    const firstChunkStartsWithEbml = startsWithMarker(firstChunkFirst4, EBML_MAGIC);
+    const shouldPrependHeader = segmentIndex > 1 && headerBytes !== null && !firstChunkStartsWithEbml;
+    const parts: BlobPart[] = [];
+    let headerPrepended = false;
+
+    if (shouldPrependHeader && headerBytes !== null) {
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      parts.push(new Blob([stableHeaderArrayBuffer]));
+      headerPrepended = true;
+    }
+
+    for (const chunk of chunks) {
+      parts.push(chunk.blob);
+    }
+
+    let blob = new Blob(parts, { type: mimeType || 'audio/webm' });
+    const firstBytes = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
+
+    if (!startsWithMarker(firstBytes, EBML_MAGIC) && headerBytes !== null) {
+      const stableHeaderArrayBuffer = new ArrayBuffer(headerBytes.byteLength);
+      new Uint8Array(stableHeaderArrayBuffer).set(headerBytes);
+      blob = new Blob([stableHeaderArrayBuffer, blob], { type: mimeType || 'audio/webm' });
+      headerPrepended = true;
+    }
+
+    return { blob, headerPrepended };
+  };
+
+  const collectOverlapChunks = (
+    previousSegmentChunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }>,
+  ): Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }> => {
+    const overlapChunks: Array<{ blob: Blob; startOffsetMs: number; endOffsetMs: number }> = [];
+    const overlapStartMs = Math.max(
+      0,
+      previousSegmentChunks[previousSegmentChunks.length - 1].endOffsetMs - SEGMENT_TRANSCRIPT_OVERLAP_MS,
+    );
+
+    for (let idx = previousSegmentChunks.length - 1; idx >= 0; idx -= 1) {
+      const chunk = previousSegmentChunks[idx];
+      overlapChunks.unshift(chunk);
+      if (chunk.startOffsetMs <= overlapStartMs) {
+        break;
+      }
+    }
+
+    return overlapChunks;
+  };
+
   for (const [index, segment] of segmentBlobs.entries()) {
     const segNumber = index + 1;
-    const segFirst64Bytes = new Uint8Array(await segment.blob.slice(0, 64).arrayBuffer());
+    let transcribeBlob = segment.blob;
+    let headerPrependedForUpload = segment.headerPrepended;
+    let overlapAppliedMs = 0;
+
+    if (index > 0) {
+      const previousSegment = segmentBlobs[index - 1];
+      const overlapChunks = collectOverlapChunks(previousSegment.chunks);
+
+      if (overlapChunks.length > 0) {
+        const withOverlap = await buildSegmentBlobFromChunks([...overlapChunks, ...segment.chunks], segNumber);
+        if (withOverlap.blob.size <= HARD_MAX_SEGMENT_BYTES) {
+          transcribeBlob = withOverlap.blob;
+          headerPrependedForUpload = withOverlap.headerPrepended;
+          overlapAppliedMs = Math.max(0, previousSegment.endOffsetMs - overlapChunks[0].startOffsetMs);
+        } else {
+          console.info(
+            `[segmentation] overlap skipped seg=${segNumber} reason=hard-max overlapSize=${withOverlap.blob.size} hardMaxBytes=${HARD_MAX_SEGMENT_BYTES}`,
+          );
+        }
+      }
+    }
+
+    const segFirst64Bytes = new Uint8Array(await transcribeBlob.slice(0, 64).arrayBuffer());
     const segFirst4Hex = bytesToHex(segFirst64Bytes.slice(0, 4));
     const segFirst64Hex = bytesToHex(segFirst64Bytes);
 
@@ -727,9 +862,9 @@ async function transcribeRecordingInSegments(recordingSession: RecordingSessionR
         : `segFirst4Hex=${segFirst4Hex}`;
 
     console.info(
-      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${segment.blob.size} type=${segment.blob.type || '(empty)'} headerPrepended=${segment.headerPrepended} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
+      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${transcribeBlob.size} type=${transcribeBlob.type || '(empty)'} headerPrepended=${headerPrependedForUpload} overlapMs=${overlapAppliedMs} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
     );
-    await transcribeSegmentBlob(segment.blob, segNumber, totalSegments, {
+    await transcribeSegmentBlob(transcribeBlob, segNumber, totalSegments, {
       startOffsetMs: segment.startOffsetMs,
       endOffsetMs: segment.endOffsetMs,
     });
