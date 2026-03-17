@@ -1,6 +1,7 @@
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob, WhisperApiError } from '../stt/whisper';
-import { state, inMemoryApiKey, updateStatus, broadcast } from './state';
+import { transcribeWithDeepgram } from '../stt/deepgram';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, updateStatus, broadcast } from './state';
 import {
   CHUNK_MIN_BYTES,
   MIN_OVERLAP_DEDUP_WORDS,
@@ -106,21 +107,42 @@ export async function transcribeSegmentBlob(
   totalSegments: number,
   timing?: { startOffsetMs?: number; endOffsetMs?: number },
 ): Promise<void> {
-  const apiKey = inMemoryApiKey;
-
   if (segmentBlob.size === 0 || segmentBlob.size < CHUNK_MIN_BYTES) {
     return;
   }
 
   const segmentMB = segmentBlob.size / (1024 * 1024);
   updateStatus('Transcribing', `Transcribing segment ${segmentIndex}/${totalSegments} (${segmentMB.toFixed(2)}MB)...`);
-  console.info(`[transcribe-segment] seg=${segmentIndex} size=${segmentBlob.size} type=${segmentBlob.type || '(empty)'}`);
+  console.info(`[transcribe-segment] seg=${segmentIndex} size=${segmentBlob.size} type=${segmentBlob.type || '(empty)'} provider=${activeProvider}`);
 
   if (state.useMockTranscription) {
     await appendTranscript(segmentIndex, `[mock] segment ${segmentIndex} text`, timing);
     return;
   }
 
+  if (activeProvider === 'deepgram') {
+    const deepgramKey = inMemoryDeepgramApiKey;
+    if (!deepgramKey) {
+      throw new Error('Missing Deepgram API key for transcription.');
+    }
+
+    for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
+      try {
+        const text = await transcribeWithDeepgram(segmentBlob, { apiKey: deepgramKey });
+        await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`, timing);
+        return;
+      } catch (error) {
+        if (attempt >= TRANSCRIBE_MAX_RETRIES) {
+          throw new Error(`Segment ${segmentIndex} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
+        }
+        const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+    return;
+  }
+
+  const apiKey = inMemoryApiKey;
   if (!apiKey) {
     throw new Error('Missing OpenAI API key for REAL transcription mode.');
   }

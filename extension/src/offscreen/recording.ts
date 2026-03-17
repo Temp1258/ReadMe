@@ -5,10 +5,11 @@ import {
   updateRecordingSession,
   updateSessionState,
 } from '../db/indexeddb';
-import { state, setInMemoryApiKey, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings } from './state';
+import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings } from './state';
 import type { AudioSource } from './state';
 import { CHUNK_TIMESLICE_MS } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
+import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue } from './live-transcribe';
 
 export async function setRecordingSessionError(sessionId: string): Promise<void> {
   try {
@@ -56,6 +57,8 @@ export async function persistChunk(blob: Blob): Promise<void> {
     state.nextChunkSeq += 1;
     state.seq = chunkSeq;
     updateStatus(state.status, state.detail);
+
+    enqueueChunkForLiveTranscription(blob, chunkSeq, Date.now());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[recording-store] failed to persist chunk sessionId=${recordingSession.sessionId} seq=${chunkSeq} error=${message}`);
@@ -239,7 +242,13 @@ export async function stopRecording(): Promise<void> {
 
   let transcriptionFailed = false;
 
-  if (recordingSession && recordingSession.chunkCount > 0) {
+  // Flush any remaining live transcription chunks
+  await flushLiveTranscribeQueue();
+
+  const hasLiveTranscript = state.transcript.trim().length > 0;
+
+  if (recordingSession && recordingSession.chunkCount > 0 && !hasLiveTranscript) {
+    // Only run batch transcription if live transcription didn't produce results
     updateStatus('Transcribing', 'Transcribing recording...');
 
     try {
@@ -250,11 +259,15 @@ export async function stopRecording(): Promise<void> {
       transcriptionFailed = true;
       publishError(`Recording failed: ${message}`);
     }
+  } else if (recordingSession && recordingSession.chunkCount > 0 && hasLiveTranscript) {
+    console.info(`[recording] skipping batch transcription, live transcript available (${state.transcript.length} chars)`);
   }
 
   await stopTracks();
   state.useMockTranscription = false;
   setInMemoryApiKey(null);
+  setInMemoryDeepgramApiKey(null);
+  setActiveProvider('mock');
 
   if (recordingSession) {
     try {
@@ -305,6 +318,10 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
 
   state.seq = 0;
   state.transcript = '';
+  state.liveTranscribeQueue = [];
+  state.liveTranscribeRunning = false;
+  state.webmHeader = null;
+  state.webmHeaderExtracted = false;
 
   broadcast({
     type: 'TRANSCRIPT_UPDATE',

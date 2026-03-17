@@ -1,5 +1,5 @@
 export type DefaultSource = 'microphone' | 'tab' | 'mix';
-export type SttProvider = 'mock' | 'openai';
+export type SttProvider = 'mock' | 'openai' | 'deepgram';
 type StorageAreaName = 'local' | 'localStorage';
 export type StorageBackendName = 'chrome.storage.local' | 'localStorage';
 export type SttDetectedFrom = 'settings.stt.apiKey' | 'none';
@@ -7,6 +7,7 @@ export type SttDetectedFrom = 'settings.stt.apiKey' | 'none';
 export type SttSettings = {
   provider: SttProvider;
   apiKey?: string;
+  deepgramApiKey?: string;
 };
 
 type SttSettingsLoadResult = SttSettings & {
@@ -15,9 +16,14 @@ type SttSettingsLoadResult = SttSettings & {
   backend: StorageBackendName;
 };
 
+export type AiFeatureSettings = {
+  summaryEnabled: boolean;
+};
+
 export type ExtensionSettings = {
   stt: SttSettings;
   defaultSource: DefaultSource;
+  ai?: AiFeatureSettings;
 };
 
 type SttCredentialSummary = {
@@ -31,7 +37,9 @@ type SttCredentialSummary = {
 export const SETTINGS_STORAGE_KEY = 'settings';
 
 function resolveSttProvider(provider: unknown): SttProvider {
-  return provider === 'openai' ? 'openai' : 'mock';
+  if (provider === 'openai') return 'openai';
+  if (provider === 'deepgram') return 'deepgram';
+  return 'mock';
 }
 
 function trimApiKey(apiKey: unknown): string {
@@ -43,13 +51,30 @@ function normalizeSettings(settings: Partial<ExtensionSettings> | null | undefin
     settings?.defaultSource === 'tab' || settings?.defaultSource === 'mix' ? settings.defaultSource : 'microphone';
 
   const apiKey = trimApiKey(settings?.stt?.apiKey);
+  const deepgramApiKey = trimApiKey(settings?.stt?.deepgramApiKey);
   const requestedProvider = resolveSttProvider(settings?.stt?.provider);
-  const provider: SttProvider = requestedProvider === 'openai' && apiKey ? 'openai' : 'mock';
 
-  return {
-    defaultSource,
-    stt: provider === 'openai' ? { provider, apiKey } : { provider: 'mock' },
+  let provider: SttProvider;
+  if (requestedProvider === 'openai' && apiKey) {
+    provider = 'openai';
+  } else if (requestedProvider === 'deepgram' && deepgramApiKey) {
+    provider = 'deepgram';
+  } else {
+    provider = 'mock';
+  }
+
+  const stt: SttSettings =
+    provider === 'openai'
+      ? { provider, apiKey, deepgramApiKey: deepgramApiKey || undefined }
+      : provider === 'deepgram'
+        ? { provider, apiKey: apiKey || undefined, deepgramApiKey }
+        : { provider: 'mock', apiKey: apiKey || undefined, deepgramApiKey: deepgramApiKey || undefined };
+
+  const ai: AiFeatureSettings = {
+    summaryEnabled: settings?.ai?.summaryEnabled ?? true,
   };
+
+  return { defaultSource, stt, ai };
 }
 
 export const defaults: ExtensionSettings = normalizeSettings(undefined);

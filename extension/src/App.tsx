@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { clearSessions, getLatestSession, listSessions, type SessionRecord } from './db/indexeddb';
+import { clearSessions, getLatestSession, listSessions, updateSessionAiSummary, type SessionRecord } from './db/indexeddb';
 import { loadSettings } from './settings';
 import type { AudioStatus, AppView, AudioSource, RecordingDiagnostics, UITheme, UILang, DeviceOption, RuntimeEventMessage } from './types';
 import { createTranslator } from './i18n';
 import { normalizeAudioSource, isRecordingActiveStatus, getExportFileName } from './utils/format';
 import { buildTxtExport, buildMarkdownExport, downloadTextFile } from './utils/export';
+import { generateSummary } from './stt/llm';
 import {
   readSelectedDeviceId,
   readSelectedAudioSource,
@@ -48,6 +49,7 @@ function App() {
   const [notesError, setNotesError] = useState<string | null>(null);
   const [notesSearch, setNotesSearch] = useState('');
   const [exportToast, setExportToast] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const exportToastTimerRef = useRef<number | null>(null);
   const previousAudioSourceLockedRef = useRef<boolean | null>(null);
   const [uiTheme, setUITheme] = useState<UITheme>('light');
@@ -411,6 +413,34 @@ function App() {
     }
   };
 
+  const handleSummarize = async (sessionId: string) => {
+    const session = notesSessions.find((s) => s.id === sessionId);
+    if (!session || !session.transcript) return;
+
+    setSummaryLoading(true);
+    try {
+      const settings = await loadSettings();
+      const apiKey = settings.stt.apiKey?.trim();
+      if (!apiKey) {
+        setNotesError(t('summaryError'));
+        return;
+      }
+
+      const result = await generateSummary(session.transcript, { apiKey }, uiLang);
+      const aiSummary = { ...result, generatedAt: Date.now() };
+      await updateSessionAiSummary(sessionId, aiSummary);
+
+      setNotesSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, aiSummary } : s)),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('summaryError');
+      setNotesError(message);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   const handleExportSession = async (format: 'txt' | 'md') => {
     const session = notesSessions.find((s) => s.id === selectedSessionId) ?? notesSessions[0];
     if (!session) {
@@ -501,12 +531,14 @@ function App() {
           error={notesError}
           search={notesSearch}
           exportToast={exportToast}
+          summaryLoading={summaryLoading}
           t={t}
           onRefresh={loadNotesSessions}
           onClearData={handleClearSessionData}
           onSearchChange={setNotesSearch}
           onSelectSession={setSelectedSessionId}
           onExport={handleExportSession}
+          onSummarize={handleSummarize}
         />
       ) : null}
 

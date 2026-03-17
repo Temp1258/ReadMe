@@ -9,6 +9,13 @@ export type SessionSegment = {
   endOffsetMs?: number;
 };
 
+export type SessionAiSummary = {
+  summary: string;
+  keyPoints: string[];
+  actionItems: string[];
+  generatedAt: number;
+};
+
 export type SessionRecord = {
   id: string;
   startedAt: number;
@@ -18,6 +25,7 @@ export type SessionRecord = {
   status: SessionStatus;
   transcript: string;
   segments: SessionSegment[];
+  aiSummary?: SessionAiSummary;
 };
 
 export type RecordingSessionStatus = 'recording' | 'stopped' | 'error';
@@ -177,6 +185,21 @@ export async function appendSessionSegment(
     ...session,
     transcript: session.transcript ? `${session.transcript}\n${normalized}` : normalized,
     segments: [...session.segments, segment],
+  };
+
+  await putSession(updated);
+  return updated;
+}
+
+export async function updateSessionAiSummary(sessionId: string, aiSummary: SessionAiSummary): Promise<SessionRecord | null> {
+  const session = await getSession(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  const updated: SessionRecord = {
+    ...session,
+    aiSummary,
   };
 
   await putSession(updated);

@@ -8,3 +8,6 @@ export const MIN_OVERLAP_DEDUP_WORDS = 3;
 export const MAX_OVERLAP_DEDUP_WORDS = 40;
 export const TRANSCRIBE_MAX_RETRIES = 3;
 export const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
+
+/** Number of chunks to accumulate before triggering live transcription (2 chunks = ~60s) */
+export const LIVE_TRANSCRIBE_CHUNK_COUNT = 2;

@@ -32,9 +32,10 @@ export type RuntimeEventMessage =
 export type GetSttSettingsResponse =
   | {
       ok: true;
-      provider: 'openai' | 'mock';
+      provider: 'openai' | 'mock' | 'deepgram';
       keyPresent: boolean;
       apiKey?: string;
+      deepgramApiKey?: string;
     }
   | { ok: false; error: string };
 
@@ -56,12 +57,27 @@ export const state = {
   recordingSession: null as RecordingSessionRecord | null,
   nextChunkSeq: 1,
   diagnosticsTimerId: null as number | null,
+  liveTranscribeEnabled: true,
+  liveTranscribeQueue: [] as Array<{ blob: Blob; seq: number; createdAt: number }>,
+  liveTranscribeRunning: false,
+  webmHeader: null as Uint8Array | null,
+  webmHeaderExtracted: false,
 };
 
 export let inMemoryApiKey: string | null = null;
+export let inMemoryDeepgramApiKey: string | null = null;
+export let activeProvider: 'openai' | 'mock' | 'deepgram' = 'mock';
 
 export function setInMemoryApiKey(key: string | null): void {
   inMemoryApiKey = key;
+}
+
+export function setInMemoryDeepgramApiKey(key: string | null): void {
+  inMemoryDeepgramApiKey = key;
+}
+
+export function setActiveProvider(provider: 'openai' | 'mock' | 'deepgram'): void {
+  activeProvider = provider;
 }
 
 export function toPersistedStatus(status: AudioStatus): PersistedStatus {
@@ -152,6 +168,8 @@ export async function refreshSttRuntimeSettings(): Promise<void> {
   if (!response?.ok) {
     const message = response?.error ?? 'Unable to fetch STT settings';
     setInMemoryApiKey(null);
+    setInMemoryDeepgramApiKey(null);
+    setActiveProvider('mock');
     state.useMockTranscription = true;
     console.info(`STT: settings unavailable error=${message}`);
     return;
@@ -159,19 +177,26 @@ export async function refreshSttRuntimeSettings(): Promise<void> {
 
   const providerId = response.provider;
   const apiKey = response.apiKey ?? '';
+  const deepgramApiKey = response.deepgramApiKey ?? '';
   const keyPresent = apiKey.trim().length > 0;
-  const shouldUseRealTranscription = response.provider === 'openai' && response.keyPresent === true && keyPresent;
+  const deepgramKeyPresent = deepgramApiKey.trim().length > 0;
 
-  setInMemoryApiKey(shouldUseRealTranscription ? apiKey : null);
-  state.useMockTranscription = !shouldUseRealTranscription;
-
-  console.info(
-    `STT: providerId=${providerId} responseProvider=${response.provider} responseKeyPresent=${response.keyPresent} canonicalKeyPresent=${keyPresent}`,
-  );
-
-  if (providerId === 'openai' && !response.keyPresent) {
-    console.info('STT: OpenAI selected but API key is empty; using MOCK mode');
+  if (providerId === 'openai' && keyPresent) {
+    setInMemoryApiKey(apiKey);
+    setInMemoryDeepgramApiKey(null);
+    setActiveProvider('openai');
+    state.useMockTranscription = false;
+  } else if (providerId === 'deepgram' && deepgramKeyPresent) {
+    setInMemoryApiKey(null);
+    setInMemoryDeepgramApiKey(deepgramApiKey);
+    setActiveProvider('deepgram');
+    state.useMockTranscription = false;
+  } else {
+    setInMemoryApiKey(null);
+    setInMemoryDeepgramApiKey(null);
+    setActiveProvider('mock');
+    state.useMockTranscription = true;
   }
 
-  console.info(state.useMockTranscription ? 'STT: using MOCK mode' : 'STT: using REAL mode');
+  console.info(`STT: provider=${providerId} mock=${state.useMockTranscription}`);
 }

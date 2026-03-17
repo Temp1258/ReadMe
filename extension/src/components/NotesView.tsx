@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
-import type { SessionRecord } from '../db/indexeddb';
+import type { SessionRecord, SessionAiSummary } from '../db/indexeddb';
 import type { TranslationKey } from '../i18n';
 import { formatTimestamp, formatDuration } from '../utils/format';
+import { AudioPlayer } from './AudioPlayer';
 
 type NotesViewProps = {
   sessions: SessionRecord[];
@@ -10,13 +11,48 @@ type NotesViewProps = {
   error: string | null;
   search: string;
   exportToast: string | null;
+  summaryLoading: boolean;
   t: (key: TranslationKey) => string;
   onRefresh: () => void;
   onClearData: () => void;
   onSearchChange: (value: string) => void;
   onSelectSession: (id: string) => void;
   onExport: (format: 'txt' | 'md') => void;
+  onSummarize: (sessionId: string) => void;
 };
+
+function AiSummaryPanel({ summary, t }: { summary: SessionAiSummary; t: (key: TranslationKey) => string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px', background: 'var(--surfaceAlt)', borderRadius: '8px' }}>
+      <h3 style={{ fontSize: '13px', margin: 0 }}>{t('aiSummary')}</h3>
+      <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0, lineHeight: 1.5 }}>{summary.summary}</p>
+
+      {summary.keyPoints.length > 0 && (
+        <>
+          <h3 style={{ fontSize: '12px', margin: 0, color: 'var(--muted)' }}>{t('keyPoints')}</h3>
+          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.6 }}>
+            {summary.keyPoints.map((point, i) => (
+              <li key={i}>{point}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {summary.actionItems.length > 0 ? (
+        <>
+          <h3 style={{ fontSize: '12px', margin: 0, color: 'var(--muted)' }}>{t('actionItemsLabel')}</h3>
+          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.6 }}>
+            {summary.actionItems.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p style={{ fontSize: '11px', color: 'var(--muted)', margin: 0 }}>{t('noActionItems')}</p>
+      )}
+    </div>
+  );
+}
 
 export function NotesView({
   sessions,
@@ -25,12 +61,14 @@ export function NotesView({
   error,
   search,
   exportToast,
+  summaryLoading,
   t,
   onRefresh,
   onClearData,
   onSearchChange,
   onSelectSession,
   onExport,
+  onSummarize,
 }: NotesViewProps) {
   const filteredSessions = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -98,6 +136,7 @@ export function NotesView({
                 </div>
                 <p className="notes-list__meta">
                   Transcript #{index + 1}
+                  {session.aiSummary ? ' • AI' : ''}
                 </p>
                 <p className="notes-list__meta">
                   {session.source}
@@ -115,16 +154,35 @@ export function NotesView({
             <>
               <div className="notes-detail__header">
                 <h3 className="notes-detail__title">{t('transcriptTitle')}</h3>
-                <div className="notes-detail__export-row" aria-label={t('export')}>
-                  <span className="notes-detail__export-label">{t('export')}</span>
-                  <button className="notes-detail__export-link" onClick={() => onExport('txt')} type="button">
-                    .txt
-                  </button>
-                  <button className="notes-detail__export-link" onClick={() => onExport('md')} type="button">
-                    .md
-                  </button>
+                <div className="notes-detail__actions">
+                  <div className="notes-detail__export-row" aria-label={t('export')}>
+                    <span className="notes-detail__export-label">{t('export')}</span>
+                    <button className="notes-detail__export-link" onClick={() => onExport('txt')} type="button">
+                      .txt
+                    </button>
+                    <button className="notes-detail__export-link" onClick={() => onExport('md')} type="button">
+                      .md
+                    </button>
+                  </div>
+                  {selectedSession.transcript && !selectedSession.aiSummary && (
+                    <button
+                      className="button button--secondary button--mini"
+                      onClick={() => onSummarize(selectedSession.id)}
+                      disabled={summaryLoading}
+                      type="button"
+                    >
+                      {summaryLoading ? t('summarizing') : t('summarize')}
+                    </button>
+                  )}
                 </div>
               </div>
+
+              <AudioPlayer sessionId={selectedSession.id} t={t} />
+
+              {selectedSession.aiSummary && (
+                <AiSummaryPanel summary={selectedSession.aiSummary} t={t} />
+              )}
+
               <div className="transcript notes-detail__transcript">
                 {selectedSession.transcript ? (
                   <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
