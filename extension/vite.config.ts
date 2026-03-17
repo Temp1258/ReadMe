@@ -14,7 +14,17 @@ export default defineConfig({
       },
       output: {
         entryFileNames: (chunkInfo) => (chunkInfo.name === 'service_worker' ? 'service_worker.js' : 'assets/[name]-[hash].js'),
+        manualChunks(id) {
+          if (id.includes('node_modules/react-dom')) {
+            return 'react-vendor';
+          }
+          if (id.includes('node_modules/react')) {
+            return 'react-vendor';
+          }
+        },
       },
     },
+    chunkSizeWarningLimit: 200,
+    sourcemap: false,
   },
 });

@@ -1,546 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { clearSessions, getLatestSession, listSessions, type SessionRecord, type SessionStatus } from './db/indexeddb';
+import { useEffect, useRef, useState } from 'react';
+import { clearSessions, getLatestSession, listSessions, type SessionRecord } from './db/indexeddb';
 import { loadSettings } from './settings';
-
-type AudioStatus = 'Idle' | 'Listening' | 'Transcribing' | 'Stopped' | 'Error';
-type AppView = 'transcription' | 'notes' | 'settings';
-type AudioSource = 'mic' | 'tab' | 'mix';
-
-type RecordingDiagnostics = {
-  durationSec: number;
-  durationLabel: string;
-  totalBytes: number;
-  totalMB: number;
-  mbPerMin: number;
-  estMinTo25MB: number | null;
-};
-type UITheme = 'light' | 'dark';
-type UILang = 'en' | 'zh';
-
-type DeviceOption = {
-  id: string;
-  label: string;
-};
-
-type RuntimeEventMessage =
-  | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
-  | {
-      type: 'STATUS_UPDATE';
-      payload: {
-        status: AudioStatus;
-        detail?: string;
-        selectedDeviceId: string;
-        selectedSource: AudioSource;
-        seq: number;
-        diagnostics: RecordingDiagnostics;
-      };
-    }
-  | { type: 'ERROR'; payload: { message: string } };
-
-
-type GetSttSettingsResponse =
-  | {
-      ok: true;
-      provider: 'openai' | 'mock';
-      keyPresent: boolean;
-      apiKey?: string;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
-function normalizeAudioSource(source?: string): AudioSource {
-  return source === 'tab' || source === 'mix' ? source : 'mic';
-}
-
-function isRecordingActiveStatus(status: AudioStatus): boolean {
-  return status !== 'Idle' && status !== 'Stopped' && status !== 'Error';
-}
-
-function mapSessionStatusToAudioStatus(status: SessionStatus): AudioStatus {
-  if (status === 'listening') {
-    return 'Listening';
-  }
-
-  if (status === 'transcribing') {
-    return 'Transcribing';
-  }
-
-  if (status === 'error') {
-    return 'Error';
-  }
-
-  if (status === 'stopped') {
-    return 'Stopped';
-  }
-
-  return 'Idle';
-}
-
-function formatTimestamp(timestamp: number): string {
-  return new Date(timestamp).toLocaleString();
-}
-
-function formatDuration(startedAt: number, endedAt?: number): string | null {
-  if (!endedAt || endedAt <= startedAt) {
-    return null;
-  }
-
-  const totalSeconds = Math.floor((endedAt - startedAt) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
-}
-
-function formatFileTimestamp(timestamp: number): string {
-  const date = new Date(timestamp);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
-}
-
-function formatExportDuration(startedAt: number, endedAt?: number): string {
-  if (!endedAt || endedAt <= startedAt) {
-    return 'in-progress';
-  }
-
-  const totalMs = endedAt - startedAt;
-  const human = formatDuration(startedAt, endedAt);
-  return human ? `${human} (${totalMs}ms)` : `${totalMs}ms`;
-}
-
-function formatOffsetLabel(offsetMs: number): string {
-  const totalSeconds = Math.max(0, Math.floor(offsetMs / 1000));
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
-function getExportFileName(session: SessionRecord, extension: string): string {
-  const safeSource = session.source.replace(/[^a-z0-9_-]/gi, '_');
-  const timestamp = formatFileTimestamp(session.startedAt);
-  return `readme_${safeSource}_${timestamp}.${extension}`;
-}
-
-function buildSessionMetadataLines(session: SessionRecord): string[] {
-  return [
-    `id: ${session.id}`,
-    `source: ${session.source}`,
-    `status: ${session.status}`,
-    `startedAt: ${formatTimestamp(session.startedAt)} (${session.startedAt})`,
-    `endedAt: ${session.endedAt ? `${formatTimestamp(session.endedAt)} (${session.endedAt})` : 'n/a'}`,
-    `duration: ${formatExportDuration(session.startedAt, session.endedAt)}`,
-  ];
-}
-
-function buildTxtExport(session: SessionRecord): string {
-  const metadata = buildSessionMetadataLines(session).join('\n');
-  const transcript = session.transcript || '(empty)';
-  const segments =
-    session.segments.length === 0
-      ? '(none)'
-      : session.segments
-          .map((segment) => {
-            const hasTiming = typeof segment.startOffsetMs === 'number' && typeof segment.endOffsetMs === 'number';
-            const timingLabel = hasTiming
-              ? `${formatOffsetLabel(segment.startOffsetMs ?? 0)} - ${formatOffsetLabel(segment.endOffsetMs ?? 0)}`
-              : String(segment.ts);
-            return `[Segment ${segment.idx} | ${timingLabel}]\n${segment.text}`;
-          })
-          .join('\n\n');
-
-  return [`Session Metadata`, metadata, '', 'Transcript', transcript, '', 'Segments', segments].join('\n');
-}
-
-function buildMarkdownExport(session: SessionRecord): string {
-  const metadataLines = buildSessionMetadataLines(session).map((line) => `- ${line}`).join('\n');
-  const transcript = session.transcript || '(empty)';
-  const segments =
-    session.segments.length === 0
-      ? '- (none)'
-      : session.segments.map((segment) => `- idx: ${segment.idx}, ts: ${segment.ts}, text: ${segment.text}`).join('\n');
-
-  return [
-    '# ReadMe Session Export',
-    '',
-    '## Metadata',
-    metadataLines,
-    '',
-    '## Transcript',
-    '',
-    '```text',
-    transcript,
-    '```',
-    '',
-    '## Segments',
-    segments,
-  ].join('\n');
-}
-
-async function downloadTextFile(filename: string, mimeType: string, content: string): Promise<void> {
-  const blob = new Blob([content], { type: mimeType });
-  const objectUrl = URL.createObjectURL(blob);
-
-  try {
-    const downloads = typeof chrome !== 'undefined' ? chrome.downloads : undefined;
-    if (downloads?.download) {
-      await new Promise<void>((resolve, reject) => {
-        downloads.download({ url: objectUrl, filename, saveAs: true }, () => {
-          const runtimeError = typeof chrome !== 'undefined' ? chrome.runtime?.lastError : undefined;
-          if (runtimeError) {
-            reject(new Error(runtimeError.message));
-            return;
-          }
-
-          resolve();
-        });
-      });
-
-      return;
-    }
-
-    const anchor = document.createElement('a');
-    anchor.href = objectUrl;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-  }
-}
-
-const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
-const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
-const UI_THEME_STORAGE_KEY = 'uiTheme';
-const UI_LANG_STORAGE_KEY = 'uiLang';
-const OFFSCREEN_DOCUMENT_PATH = 'dist/src/offscreen.html';
-
-type RuntimeContext = {
-  contextType: string;
-  documentUrl?: string;
-};
-
-async function ensureOffscreenDocument(): Promise<void> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.id || !chrome.offscreen?.createDocument) {
-    return;
-  }
-
-  const offscreenDocumentUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
-  const getContexts = chrome.runtime.getContexts as
-    | ((query: { contextTypes: string[]; documentUrls: string[] }) => Promise<RuntimeContext[]>)
-    | undefined;
-
-  if (getContexts) {
-    const contexts = await getContexts({
-      contextTypes: ['OFFSCREEN_DOCUMENT'],
-      documentUrls: [offscreenDocumentUrl],
-    });
-
-    if (contexts.length > 0) {
-      return;
-    }
-  }
-
-  try {
-    await chrome.offscreen.createDocument({
-      url: OFFSCREEN_DOCUMENT_PATH,
-      reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
-      justification: 'Capture audio and keep tab playback audible while recording runs offscreen.',
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes('single offscreen document')) {
-      throw error;
-    }
-  }
-}
-
-type ChromeStorageArea = {
-  get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
-  set: (items: Record<string, unknown>, callback?: () => void) => void;
-  remove: (keys: string | string[], callback?: () => void) => void;
-};
-
-const UI_COPY = {
-  en: {
-    appTitle: 'ReadMe',
-    subtitle: 'Quick transcription capture',
-    tabsTranscription: 'Transcription',
-    tabsNotes: 'Notes',
-    tabsSettings: 'Settings',
-    status: 'Status',
-    warningOneLine: 'Warning: audio may be sent to a cloud transcription API.',
-    learnMore: 'Learn more',
-    start: 'Start',
-    stop: 'Stop',
-    clear: 'Clear',
-    clearData: 'Clear data',
-    clearDataHint: 'Removes local transcripts and notes.',
-    inputs: 'Inputs',
-    source: 'Source',
-    microphone: 'Microphone',
-    sourceLocked: 'Source is locked while recording.',
-    sourceMic: 'Microphone',
-    sourceTab: 'Tab audio',
-    sourceMix: 'Mix (tab + mic)',
-    transcriptTitle: 'Transcript',
-    transcriptEmpty: 'No transcript yet. Start recording to begin.',
-    notesTitle: 'Notes',
-    refresh: 'Refresh',
-    searchTranscript: 'Search transcript',
-    searchPlaceholder: 'Filter by transcript text',
-    loadingSessions: 'Loading sessions...',
-    noSessions: 'No sessions found.',
-    noTranscriptYet: 'No transcript yet.',
-    selectSession: 'Select a session to view details.',
-    segments: 'Segments',
-    noSegments: 'No segments yet.',
-    exportTxt: 'Export TXT',
-    exportMd: 'Export MD',
-    export: 'Export',
-    appearance: 'Appearance',
-    appearanceLight: 'Light',
-    appearanceDark: 'Dark',
-    language: 'Language',
-    languageEnglish: 'English',
-    languageChinese: '中文',
-    providerSection: 'Provider',
-    providerStatus: 'Provider status',
-    manageApi: 'Manage API key',
-    privacy: 'Privacy',
-    privacySummary: 'How cloud transcription works',
-    privacyBody:
-      'When an API key is configured, recorded audio may be sent to a cloud transcription API for processing. Use local controls and provider settings to manage this behavior.',
-    systemDefaultMic: 'System default microphone',
-  },
-  zh: {
-    appTitle: 'ReadMe',
-    subtitle: '快速转录记录',
-    tabsTranscription: '转录',
-    tabsNotes: '笔记',
-    tabsSettings: '设置',
-    status: '状态',
-    warningOneLine: '警告：音频可能会发送到云端转录 API。',
-    learnMore: '了解更多',
-    start: '开始',
-    stop: '停止',
-    clear: '清空',
-    clearData: '清空数据',
-    clearDataHint: '删除本地转录和笔记。',
-    inputs: '输入',
-    source: '来源',
-    microphone: '麦克风',
-    sourceLocked: '录制中来源不可切换。',
-    sourceMic: '麦克风',
-    sourceTab: '标签页音频',
-    sourceMix: '混合（标签页 + 麦克风）',
-    transcriptTitle: '转录内容',
-    transcriptEmpty: '暂无转录内容。开始录制后会显示。',
-    notesTitle: '笔记',
-    refresh: '刷新',
-    searchTranscript: '搜索转录内容',
-    searchPlaceholder: '按转录文本筛选',
-    loadingSessions: '正在加载会话...',
-    noSessions: '未找到会话。',
-    noTranscriptYet: '暂无转录内容。',
-    selectSession: '请选择一个会话查看详情。',
-    segments: '分段',
-    noSegments: '暂无分段。',
-    exportTxt: '导出 TXT',
-    exportMd: '导出 MD',
-    export: '导出',
-    appearance: '外观',
-    appearanceLight: '浅色',
-    appearanceDark: '深色',
-    language: '语言',
-    languageEnglish: 'English',
-    languageChinese: '中文',
-    providerSection: '服务提供商',
-    providerStatus: '服务状态',
-    manageApi: '管理 API Key',
-    privacy: '隐私',
-    privacySummary: '云端转录说明',
-    privacyBody: '配置 API Key 后，录制音频可能会发送到云端转录 API 进行处理。你可以通过本地设置和服务配置控制该行为。',
-    systemDefaultMic: '系统默认麦克风',
-  },
-} as const;
-
-function getStorageArea(): ChromeStorageArea | null {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) {
-    return null;
-  }
-
-  return chrome.storage.local;
-}
-
-
-async function readSelectedDeviceId(): Promise<string> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    return window.localStorage.getItem(AUDIO_DEVICE_STORAGE_KEY) ?? 'default';
-  }
-
-  return new Promise((resolve) => {
-    storage.get(AUDIO_DEVICE_STORAGE_KEY, (items) => {
-      resolve((items[AUDIO_DEVICE_STORAGE_KEY] as string | undefined) ?? 'default');
-    });
-  });
-}
-
-async function readSelectedAudioSource(): Promise<AudioSource> {
-  const settings = await loadSettings();
-  const fallbackSource = normalizeAudioSource(settings.defaultSource);
-  const storage = getStorageArea();
-
-  if (!storage) {
-    return (window.localStorage.getItem(AUDIO_SOURCE_STORAGE_KEY) as AudioSource | null) ?? fallbackSource;
-  }
-
-  return new Promise((resolve) => {
-    storage.get(AUDIO_SOURCE_STORAGE_KEY, (items) => {
-      const stored = items[AUDIO_SOURCE_STORAGE_KEY];
-      if (stored === 'tab' || stored === 'mic' || stored === 'mix') {
-        resolve(stored);
-        return;
-      }
-
-      resolve(fallbackSource);
-    });
-  });
-}
-
-async function persistSelectedAudioSource(source: AudioSource): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    window.localStorage.setItem(AUDIO_SOURCE_STORAGE_KEY, source);
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    storage.set({ [AUDIO_SOURCE_STORAGE_KEY]: source }, () => resolve());
-  });
-}
-
-async function persistSelectedDeviceId(deviceId: string): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    window.localStorage.setItem(AUDIO_DEVICE_STORAGE_KEY, deviceId);
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    storage.set({ [AUDIO_DEVICE_STORAGE_KEY]: deviceId }, () => resolve());
-  });
-}
-
-async function readUITheme(): Promise<UITheme> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    const localTheme = window.localStorage.getItem(UI_THEME_STORAGE_KEY);
-    return localTheme === 'dark' ? 'dark' : 'light';
-  }
-
-  return new Promise((resolve) => {
-    storage.get(UI_THEME_STORAGE_KEY, (items) => {
-      resolve(items[UI_THEME_STORAGE_KEY] === 'dark' ? 'dark' : 'light');
-    });
-  });
-}
-
-async function persistUITheme(theme: UITheme): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    window.localStorage.setItem(UI_THEME_STORAGE_KEY, theme);
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    storage.set({ [UI_THEME_STORAGE_KEY]: theme }, () => resolve());
-  });
-}
-
-async function readUILang(): Promise<UILang> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    const localLang = window.localStorage.getItem(UI_LANG_STORAGE_KEY);
-    return localLang === 'zh' ? 'zh' : 'en';
-  }
-
-  return new Promise((resolve) => {
-    storage.get(UI_LANG_STORAGE_KEY, (items) => {
-      resolve(items[UI_LANG_STORAGE_KEY] === 'zh' ? 'zh' : 'en');
-    });
-  });
-}
-
-async function persistUILang(lang: UILang): Promise<void> {
-  const storage = getStorageArea();
-
-  if (!storage) {
-    window.localStorage.setItem(UI_LANG_STORAGE_KEY, lang);
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    storage.set({ [UI_LANG_STORAGE_KEY]: lang }, () => resolve());
-  });
-}
-
-
-async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: string; configurationLabel: string; error?: string }> {
-  const sendMessage = chrome.runtime?.sendMessage as ((message: { type: 'GET_STT_SETTINGS' }) => Promise<GetSttSettingsResponse>) | undefined;
-
-  if (!sendMessage) {
-    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: 'Runtime messaging unavailable.' };
-  }
-
-  try {
-    const response = await sendMessage({ type: 'GET_STT_SETTINGS' });
-    if (!response.ok) {
-      return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: response.error || 'Unable to read STT settings.' };
-    }
-
-    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : 'Mock';
-    const configurationLabel = response.provider === 'openai' && response.keyPresent ? 'Configured' : 'Not configured';
-
-    return { providerLabel, configurationLabel };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to read STT settings.';
-    return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: message };
-  }
-}
-
-async function queryStateFromOffscreen() {
-  const sendMessage = chrome.runtime?.sendMessage as
-    | ((message: { type: 'GET_AUDIO_STATE' }) => Promise<{
-        status?: AudioStatus;
-        detail?: string;
-        selectedDeviceId?: string;
-        selectedSource?: AudioSource;
-        seq?: number;
-        transcript?: string;
-        diagnostics?: RecordingDiagnostics;
-      }>)
-    | undefined;
-
-  if (!sendMessage) {
-    return null;
-  }
-
-  return sendMessage({ type: 'GET_AUDIO_STATE' });
-}
+import type { AudioStatus, AppView, AudioSource, RecordingDiagnostics, UITheme, UILang, DeviceOption, RuntimeEventMessage } from './types';
+import { createTranslator } from './i18n';
+import { normalizeAudioSource, isRecordingActiveStatus, getExportFileName } from './utils/format';
+import { buildTxtExport, buildMarkdownExport, downloadTextFile } from './utils/export';
+import {
+  readSelectedDeviceId,
+  readSelectedAudioSource,
+  persistSelectedAudioSource,
+  persistSelectedDeviceId,
+  readUITheme,
+  persistUITheme,
+  readUILang,
+  persistUILang,
+  ensureOffscreenDocument,
+  getSttDiagnosticsFromRuntime,
+  queryStateFromOffscreen,
+  mapSessionStatusToAudioStatus,
+  UI_THEME_STORAGE_KEY,
+  UI_LANG_STORAGE_KEY,
+} from './utils/chrome-storage';
+import { TranscriptionView } from './components/TranscriptionView';
+import { NotesView } from './components/NotesView';
+import { SettingsView } from './components/SettingsView';
 
 function App() {
   const [error, setError] = useState<string | null>(null);
@@ -566,12 +49,11 @@ function App() {
   const [notesSearch, setNotesSearch] = useState('');
   const [exportToast, setExportToast] = useState<string | null>(null);
   const exportToastTimerRef = useRef<number | null>(null);
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousAudioSourceLockedRef = useRef<boolean | null>(null);
   const [uiTheme, setUITheme] = useState<UITheme>('light');
   const [uiLang, setUILang] = useState<UILang>('en');
 
-  const t = (key: keyof (typeof UI_COPY)['en']) => UI_COPY[uiLang][key];
+  const t = createTranslator(uiLang);
 
   const isRecordingActive = isRecordingActiveStatus(status);
   const isAudioSourceLocked = isRecordingActive;
@@ -645,14 +127,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!transcriptRef.current) {
-      return;
-    }
-
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [transcriptText]);
-
-  useEffect(() => {
     if (previousAudioSourceLockedRef.current === isAudioSourceLocked) {
       return;
     }
@@ -674,7 +148,7 @@ function App() {
         const [snapshot, persistedDeviceId, persistedAudioSource, latestSession] = await Promise.all([
           queryStateFromOffscreen(),
           readSelectedDeviceId(),
-          readSelectedAudioSource(),
+          readSelectedAudioSource(selectedSource),
           getLatestSession(),
         ]);
 
@@ -754,7 +228,7 @@ function App() {
         const mediaDevices = await navigator.mediaDevices.enumerateDevices();
         const microphoneDevices = mediaDevices.filter((device) => device.kind === 'audioinput');
         const options: DeviceOption[] = [
-          { id: 'default', label: UI_COPY.en.systemDefaultMic },
+          { id: 'default', label: 'System default microphone' },
           ...microphoneDevices.map((device, index) => ({
             id: device.deviceId,
             label: device.label || `Microphone ${index + 1}`,
@@ -778,6 +252,14 @@ function App() {
 
     return () => {
       navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (exportToastTimerRef.current !== null) {
+        window.clearTimeout(exportToastTimerRef.current);
+      }
     };
   }, []);
 
@@ -904,7 +386,6 @@ function App() {
     window.open(chrome.runtime.getURL('options.html'), '_blank');
   };
 
-
   const handleThemeChange = async (theme: UITheme) => {
     setUITheme(theme);
     await persistUITheme(theme);
@@ -913,10 +394,6 @@ function App() {
   const handleLanguageChange = async (lang: UILang) => {
     setUILang(lang);
     await persistUILang(lang);
-  };
-
-  const handleLearnMoreClick = () => {
-    setActiveView('settings');
   };
 
   const handleClearSessionData = async () => {
@@ -935,16 +412,17 @@ function App() {
   };
 
   const handleExportSession = async (format: 'txt' | 'md') => {
-    if (!selectedSession) {
+    const session = notesSessions.find((s) => s.id === selectedSessionId) ?? notesSessions[0];
+    if (!session) {
       return;
     }
 
     try {
       setNotesError(null);
 
-      const exportContent = format === 'txt' ? buildTxtExport(selectedSession) : buildMarkdownExport(selectedSession);
+      const exportContent = format === 'txt' ? buildTxtExport(session) : buildMarkdownExport(session);
       const mimeType = 'text/plain;charset=utf-8';
-      const fileName = getExportFileName(selectedSession, format);
+      const fileName = getExportFileName(session, format);
 
       await downloadTextFile(fileName, mimeType, exportContent);
       setExportToast(`Downloaded: ${fileName}`);
@@ -960,331 +438,92 @@ function App() {
     }
   };
 
-  const filteredSessions = useMemo(() => {
-    const query = notesSearch.trim().toLowerCase();
-    if (!query) {
-      return notesSessions;
-    }
-
-    return notesSessions.filter((session) => session.transcript.toLowerCase().includes(query));
-  }, [notesSearch, notesSessions]);
-
-
-  useEffect(() => {
-    return () => {
-      if (exportToastTimerRef.current !== null) {
-        window.clearTimeout(exportToastTimerRef.current);
-      }
-    };
-  }, []);
-
-  const selectedSession = useMemo(() => {
-    if (!selectedSessionId) {
-      return filteredSessions[0] ?? null;
-    }
-
-    return filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0] ?? null;
-  }, [filteredSessions, selectedSessionId]);
-
   return (
     <main className="popup" data-theme={uiTheme}>
-        <header className="popup__header">
-          <div className="popup__brand">
-            <h1>{t('appTitle')}</h1>
-            <p className="subtitle subtitle--compact">{t('subtitle')}</p>
-          </div>
-        </header>
+      <header className="popup__header">
+        <div className="popup__brand">
+          <h1>{t('appTitle')}</h1>
+          <p className="subtitle subtitle--compact">{t('subtitle')}</p>
+        </div>
+      </header>
 
-        <section className="segment-control" aria-label="Sections">
-          <button
-            className={`segment-control__button ${activeView === 'transcription' ? 'segment-control__button--active' : ''}`}
-            onClick={() => setActiveView('transcription')}
-            type="button"
-          >
-            {t('tabsTranscription')}
-          </button>
-          <button
-            className={`segment-control__button ${activeView === 'notes' ? 'segment-control__button--active' : ''}`}
-            onClick={() => setActiveView('notes')}
-            type="button"
-          >
-            {t('tabsNotes')}
-          </button>
-          <button
-            className={`segment-control__button ${activeView === 'settings' ? 'segment-control__button--active' : ''}`}
-            onClick={() => setActiveView('settings')}
-            type="button"
-          >
-            {t('tabsSettings')}
-          </button>
-        </section>
+      <section className="segment-control" aria-label="Sections">
+        <button
+          className={`segment-control__button ${activeView === 'transcription' ? 'segment-control__button--active' : ''}`}
+          onClick={() => setActiveView('transcription')}
+          type="button"
+        >
+          {t('tabsTranscription')}
+        </button>
+        <button
+          className={`segment-control__button ${activeView === 'notes' ? 'segment-control__button--active' : ''}`}
+          onClick={() => setActiveView('notes')}
+          type="button"
+        >
+          {t('tabsNotes')}
+        </button>
+        <button
+          className={`segment-control__button ${activeView === 'settings' ? 'segment-control__button--active' : ''}`}
+          onClick={() => setActiveView('settings')}
+          type="button"
+        >
+          {t('tabsSettings')}
+        </button>
+      </section>
 
-        {activeView === 'transcription' ? (
-          <section className="transcription-view">
-            <section className="status-card" aria-label={t('status')}>
-              <div className="status-card__header">
-                <div className="status-pill">
-                  <span className={`status-dot status-dot--${status.toLowerCase()}`} aria-hidden="true" />
-                  <p className="status-pill__label">{t('status')}</p>
-                  <p className="status-pill__value">{status}</p>
-                </div>
-                <p className="status-card__provider">{sttStatusLine}</p>
-              </div>
-              <div className="status-metrics" role="list" aria-label="Recording diagnostics">
-                <p className="status-metrics__item" role="listitem">
-                  <span className="status-metrics__label">Duration</span>
-                  <span className="status-metrics__value">{recordingDiagnostics.durationLabel}</span>
-                </p>
-                <p className="status-metrics__item" role="listitem">
-                  <span className="status-metrics__label">Size</span>
-                  <span className="status-metrics__value">{recordingDiagnostics.totalMB.toFixed(2)} MB</span>
-                </p>
-                <p className="status-metrics__item" role="listitem">
-                  <span className="status-metrics__label">Rate</span>
-                  <span className="status-metrics__value">{recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</span>
-                </p>
-                <p className="status-metrics__item" role="listitem">
-                  <span className="status-metrics__label">Est. 25MB</span>
-                  <span className="status-metrics__value">
-                    {recordingDiagnostics.estMinTo25MB === null ? 'n/a' : `${recordingDiagnostics.estMinTo25MB.toFixed(1)} min`}
-                  </span>
-                </p>
-              </div>
-            </section>
+      {activeView === 'transcription' ? (
+        <TranscriptionView
+          status={status}
+          recordingDiagnostics={recordingDiagnostics}
+          sttStatusLine={sttStatusLine}
+          isRecordingActive={isRecordingActive}
+          isAudioSourceLocked={isAudioSourceLocked}
+          isMicrophoneLocked={isMicrophoneLocked}
+          selectedSource={selectedSource}
+          selectedDeviceId={selectedDeviceId}
+          devices={devices}
+          transcriptText={transcriptText}
+          error={error}
+          t={t}
+          onStartListening={handleStartListening}
+          onStopListening={handleStopListening}
+          onSourceChange={handleSourceChange}
+          onDeviceChange={handleDeviceChange}
+          onLearnMoreClick={() => setActiveView('settings')}
+        />
+      ) : null}
 
-            <section className="action-card">
-              {!isRecordingActive ? (
-                <button className="button button--primary action-card__button" onClick={handleStartListening} type="button">
-                  {t('start')}
-                </button>
-              ) : (
-                <button className="button button--primary action-card__button" onClick={handleStopListening} type="button">
-                  {t('stop')}
-                </button>
-              )}
+      {activeView === 'notes' ? (
+        <NotesView
+          sessions={notesSessions}
+          selectedSessionId={selectedSessionId}
+          loading={notesLoading}
+          error={notesError}
+          search={notesSearch}
+          exportToast={exportToast}
+          t={t}
+          onRefresh={loadNotesSessions}
+          onClearData={handleClearSessionData}
+          onSearchChange={setNotesSearch}
+          onSelectSession={setSelectedSessionId}
+          onExport={handleExportSession}
+        />
+      ) : null}
 
-              <div className="warning-inline warning-inline--compact">
-                <p>
-                  {t('warningOneLine')}
-                  <button className="link-button" onClick={handleLearnMoreClick} type="button">
-                    {t('learnMore')}
-                  </button>
-                </p>
-              </div>
-            </section>
+      {activeView === 'settings' ? (
+        <SettingsView
+          uiTheme={uiTheme}
+          uiLang={uiLang}
+          sttStatusLine={sttStatusLine}
+          t={t}
+          onThemeChange={(theme) => void handleThemeChange(theme)}
+          onLanguageChange={(lang) => void handleLanguageChange(lang)}
+          onOpenSettings={() => void handleOpenSettings()}
+        />
+      ) : null}
 
-            <section className="inputs-section">
-              <div className="inputs-section__header">
-                <p className="section-label">{t('inputs')}</p>
-              </div>
-              <div className="source-grid">
-                <div className="field-group">
-                  <label className="form__label" htmlFor="audio-source">
-                    {t('source')}
-                  </label>
-                  <select
-                    className="form__input"
-                    disabled={isAudioSourceLocked}
-                    id="audio-source"
-                    onChange={(event) =>
-                      handleSourceChange(normalizeAudioSource(event.target.value))
-                    }
-                    value={selectedSource}
-                  >
-                    <option value="mic">{t('sourceMic')}</option>
-                    <option value="tab">{t('sourceTab')}</option>
-                    <option value="mix">{t('sourceMix')}</option>
-                  </select>
-                  {isAudioSourceLocked ? <p className="field-hint">{t('sourceLocked')}</p> : null}
-                </div>
-
-                <div className="field-group">
-                  <label className="form__label" htmlFor="microphone-device">
-                    {t('microphone')}
-                  </label>
-                  <select
-                    className="form__input"
-                    disabled={isMicrophoneLocked}
-                    id="microphone-device"
-                    onChange={(event) => handleDeviceChange(event.target.value)}
-                    value={selectedDeviceId}
-                  >
-                    {devices.map((device) => (
-                      <option key={device.id} value={device.id}>
-                        {device.id === 'default' ? t('systemDefaultMic') : device.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </section>
-
-            {error && <p className="error">{error}</p>}
-
-            <section className="transcript-panel">
-              <div className="transcript-panel__header">
-                <h2>{t('transcriptTitle')}</h2>
-                <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
-              </div>
-              <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-                {!transcriptText ? <p className="transcript__line transcript__line--muted">{t('transcriptEmpty')}</p> : null}
-                {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
-              </div>
-            </section>
-          </section>
-        ) : null}
-
-        {activeView === 'notes' ? (
-          <section className="notes-view">
-            <div className="notes__toolbar">
-              <h2>{t('notesTitle')}</h2>
-              <div className="notes__toolbar-actions">
-                <button className="button button--tertiary" onClick={loadNotesSessions} type="button">
-                  {t('refresh')}
-                </button>
-                <button className="button button--tertiary button--danger" onClick={handleClearSessionData} type="button">
-                  {t('clearData')}
-                </button>
-              </div>
-            </div>
-
-            <label className="form__label" htmlFor="notes-search">
-              {t('searchTranscript')}
-            </label>
-            <input
-              className="form__input"
-              id="notes-search"
-              onChange={(event) => setNotesSearch(event.target.value)}
-              placeholder={t('searchPlaceholder')}
-              type="search"
-              value={notesSearch}
-            />
-
-            {notesError ? <p className="error">{notesError}</p> : null}
-            {notesLoading ? <p className="panel__body">{t('loadingSessions')}</p> : null}
-
-            <div className="notes-layout">
-              <div className="notes-list" role="list">
-                {!filteredSessions.length ? <p className="panel__body">{t('noSessions')}</p> : null}
-                {filteredSessions.map((session, index) => {
-                  const duration = formatDuration(session.startedAt, session.endedAt);
-
-                  return (
-                    <button
-                      aria-pressed={selectedSession?.id === session.id}
-                      className={`notes-list__item ${selectedSession?.id === session.id ? 'notes-list__item--active' : ''}`}
-                      key={session.id}
-                      onClick={() => setSelectedSessionId(session.id)}
-                      type="button"
-                    >
-                      <div className="notes-list__title-row">
-                        <p className="notes-list__time">{formatTimestamp(session.startedAt)}</p>
-                        <span className={`status-indicator status-indicator--${session.status}`}>{session.status}</span>
-                      </div>
-                      <p className="notes-list__meta">
-                        Transcript #{index + 1}
-                      </p>
-                      <p className="notes-list__meta">
-                        {session.source}
-                        {duration ? ` • ${duration}` : ''}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="notes-detail">
-                {!selectedSession ? (
-                  <p className="panel__body">{t('selectSession')}</p>
-                ) : (
-                  <>
-                    <div className="notes-detail__header">
-                      <h3 className="notes-detail__title">{t('transcriptTitle')}</h3>
-                      <div className="notes-detail__export-row" aria-label={t('export')}>
-                        <span className="notes-detail__export-label">{t('export')}</span>
-                        <button className="notes-detail__export-link" onClick={() => handleExportSession('txt')} type="button">
-                          .txt
-                        </button>
-                        <button className="notes-detail__export-link" onClick={() => handleExportSession('md')} type="button">
-                          .md
-                        </button>
-                      </div>
-                    </div>
-                    <div className="transcript notes-detail__transcript">
-                      {selectedSession.transcript ? (
-                        <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
-                      ) : (
-                        <p className="transcript__line transcript__line--muted">{t('noTranscriptYet')}</p>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {activeView === 'settings' ? (
-          <section className="settings-view">
-            <div className="settings-card">
-              <h2>{t('appearance')}</h2>
-              <div className="settings-toggle-row">
-                <p className="panel__body">{t('appearance')}</p>
-                <div className="inline-actions">
-                  <button
-                    className={`button button--secondary ${uiTheme === 'light' ? 'button--selected' : ''}`}
-                    onClick={() => void handleThemeChange('light')}
-                    type="button"
-                  >
-                    {t('appearanceLight')}
-                  </button>
-                  <button
-                    className={`button button--secondary ${uiTheme === 'dark' ? 'button--selected' : ''}`}
-                    onClick={() => void handleThemeChange('dark')}
-                    type="button"
-                  >
-                    {t('appearanceDark')}
-                  </button>
-                </div>
-              </div>
-              <div className="settings-toggle-row">
-                <p className="panel__body">{t('language')}</p>
-                <div className="inline-actions">
-                  <button
-                    className={`button button--secondary ${uiLang === 'en' ? 'button--selected' : ''}`}
-                    onClick={() => void handleLanguageChange('en')}
-                    type="button"
-                  >
-                    {t('languageEnglish')}
-                  </button>
-                  <button
-                    className={`button button--secondary ${uiLang === 'zh' ? 'button--selected' : ''}`}
-                    onClick={() => void handleLanguageChange('zh')}
-                    type="button"
-                  >
-                    {t('languageChinese')}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-card">
-              <h2>{t('providerSection')}</h2>
-              <p className="panel__body">{t('providerStatus')}: {sttStatusLine}</p>
-              <button className="button button--tertiary settings-link" onClick={() => void handleOpenSettings()} type="button">
-                {t('manageApi')}
-              </button>
-            </div>
-
-            <details className="settings-card">
-              <summary>{t('privacySummary')}</summary>
-              <p className="panel__body">{t('privacyBody')}</p>
-            </details>
-          </section>
-        ) : null}
-
-        {exportToast ? <p className="toast">{exportToast}</p> : null}
-      </main>
+      {exportToast ? <p className="toast">{exportToast}</p> : null}
+    </main>
   );
 }
 
