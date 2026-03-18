@@ -7,6 +7,7 @@ type GetSttSettingsSuccess = {
   provider: SttProvider;
   keyPresent: boolean;
   apiKey?: string;
+  deepgramApiKey?: string;
 };
 
 type GetSttSettingsFailure = {
@@ -28,18 +29,30 @@ function storageGet(storage: chrome.storage.StorageArea, keys: string[]): Promis
   });
 }
 
-function parseSttFromItems(items: Record<string, unknown>): { provider: SttProvider; keyPresent: boolean; apiKey?: string } {
-  const settings = (items[SETTINGS_STORAGE_KEY] as { stt?: { provider?: unknown; apiKey?: unknown } } | undefined) ?? {};
+function parseSttFromItems(items: Record<string, unknown>): { provider: SttProvider; keyPresent: boolean; apiKey?: string; deepgramApiKey?: string } {
+  const settings = (items[SETTINGS_STORAGE_KEY] as { stt?: { provider?: unknown; apiKey?: unknown; deepgramApiKey?: unknown } } | undefined) ?? {};
   const rawProvider = settings.stt?.provider;
   const rawApiKey = settings.stt?.apiKey;
+  const rawDeepgramApiKey = settings.stt?.deepgramApiKey;
   const apiKey = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
+  const deepgramApiKey = typeof rawDeepgramApiKey === 'string' ? rawDeepgramApiKey.trim() : '';
   const keyPresent = apiKey.length > 0;
-  const provider: SttProvider = rawProvider === 'openai' && keyPresent ? 'openai' : 'mock';
+  const deepgramKeyPresent = deepgramApiKey.length > 0;
+
+  let provider: SttProvider;
+  if (rawProvider === 'openai' && keyPresent) {
+    provider = 'openai';
+  } else if (rawProvider === 'deepgram' && deepgramKeyPresent) {
+    provider = 'deepgram';
+  } else {
+    provider = 'mock';
+  }
 
   return {
     provider,
-    keyPresent,
+    keyPresent: provider === 'openai' ? keyPresent : provider === 'deepgram' ? deepgramKeyPresent : false,
     ...(provider === 'openai' ? { apiKey } : {}),
+    ...(provider === 'deepgram' ? { deepgramApiKey } : {}),
   };
 }
 
@@ -61,6 +74,7 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
     provider: parsed.provider,
     keyPresent: parsed.keyPresent,
     ...(parsed.apiKey ? { apiKey: parsed.apiKey } : {}),
+    ...(parsed.deepgramApiKey ? { deepgramApiKey: parsed.deepgramApiKey } : {}),
   };
 }
 
