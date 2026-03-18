@@ -56,6 +56,30 @@ export function buildMarkdownExport(session: SessionRecord): string {
   ].join('\n');
 }
 
+function formatSrtTimestamp(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const millis = Math.floor(ms % 1000);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(millis).padStart(3, '0')}`;
+}
+
+export function buildSrtExport(session: SessionRecord): string {
+  if (session.segments.length === 0) {
+    return '';
+  }
+
+  return session.segments
+    .filter((seg) => typeof seg.startOffsetMs === 'number' && typeof seg.endOffsetMs === 'number')
+    .map((seg, index) => {
+      const start = formatSrtTimestamp(seg.startOffsetMs ?? 0);
+      const end = formatSrtTimestamp(seg.endOffsetMs ?? 0);
+      return `${index + 1}\n${start} --> ${end}\n${seg.text}`;
+    })
+    .join('\n\n');
+}
+
 export async function downloadTextFile(filename: string, mimeType: string, content: string): Promise<void> {
   const blob = new Blob([content], { type: mimeType });
   const objectUrl = URL.createObjectURL(blob);

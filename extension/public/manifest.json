@@ -30,6 +30,7 @@
     "tabCapture"
   ],
   "host_permissions": [
-    "https://api.openai.com/*"
+    "https://api.openai.com/*",
+    "https://api.deepgram.com/*"
   ]
 }

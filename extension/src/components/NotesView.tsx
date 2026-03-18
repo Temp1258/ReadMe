@@ -17,7 +17,7 @@ type NotesViewProps = {
   onClearData: () => void;
   onSearchChange: (value: string) => void;
   onSelectSession: (id: string) => void;
-  onExport: (format: 'txt' | 'md') => void;
+  onExport: (format: 'txt' | 'md' | 'srt') => void;
   onSummarize: (sessionId: string) => void;
 };
 
@@ -162,6 +162,9 @@ export function NotesView({
                     </button>
                     <button className="notes-detail__export-link" onClick={() => onExport('md')} type="button">
                       .md
+                    </button>
+                    <button className="notes-detail__export-link" onClick={() => onExport('srt')} type="button">
+                      .srt
                     </button>
                   </div>
                   {selectedSession.transcript && !selectedSession.aiSummary && (

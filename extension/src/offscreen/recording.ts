@@ -7,7 +7,7 @@ import {
 } from '../db/indexeddb';
 import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings } from './state';
 import type { AudioSource } from './state';
-import { CHUNK_TIMESLICE_MS } from './constants';
+import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
 import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue } from './live-transcribe';
 
@@ -110,6 +110,22 @@ function startDiagnosticsTimer(): void {
   state.diagnosticsTimerId = window.setInterval(() => {
     if (state.status === 'Listening') {
       updateStatus(state.status, state.detail);
+
+      // Auto-stop on limits
+      const session = state.recordingSession;
+      if (session) {
+        const elapsed = Date.now() - session.startTime;
+        if (elapsed >= MAX_RECORDING_DURATION_MS) {
+          console.info(`[recording] auto-stop: max duration reached (${Math.round(elapsed / 60000)}min)`);
+          void stopRecording();
+          return;
+        }
+        if (session.totalBytes >= MAX_RECORDING_SIZE_BYTES) {
+          console.info(`[recording] auto-stop: max size reached (${(session.totalBytes / (1024 * 1024)).toFixed(0)}MB)`);
+          void stopRecording();
+          return;
+        }
+      }
     }
   }, 1000);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listRecordingChunksBySession } from '../db/indexeddb';
 import type { TranslationKey } from '../i18n';
 
@@ -9,6 +9,7 @@ type AudioPlayerProps = {
 
 export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -16,10 +17,18 @@ export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const revokePreviousUrl = useCallback(() => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    revokePreviousUrl();
     setBlobUrl(null);
     setIsPlaying(false);
     setCurrentTime(0);
@@ -41,7 +50,10 @@ export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
         const url = URL.createObjectURL(blob);
 
         if (!cancelled) {
+          blobUrlRef.current = url;
           setBlobUrl(url);
+        } else {
+          URL.revokeObjectURL(url);
         }
       } catch (err) {
         if (!cancelled) {
@@ -56,16 +68,16 @@ export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
 
     return () => {
       cancelled = true;
+      revokePreviousUrl();
     };
-  }, [sessionId]);
+  }, [sessionId, revokePreviousUrl]);
 
+  // Clean up on unmount
   useEffect(() => {
     return () => {
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
+      revokePreviousUrl();
     };
-  }, [blobUrl]);
+  }, [revokePreviousUrl]);
 
   const togglePlayback = () => {
     const audio = audioRef.current;

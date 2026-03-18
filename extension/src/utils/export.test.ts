@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTxtExport, buildMarkdownExport } from './export';
+import { buildTxtExport, buildMarkdownExport, buildSrtExport } from './export';
 import type { SessionRecord } from '../db/indexeddb';
 
 const mockSession: SessionRecord = {
@@ -73,5 +73,41 @@ describe('buildMarkdownExport', () => {
     const result = buildMarkdownExport(mockSession);
     expect(result).toContain('- id: test-session-1');
     expect(result).toContain('- source: mic');
+  });
+});
+
+describe('buildSrtExport', () => {
+  it('produces valid SRT format with timing', () => {
+    const result = buildSrtExport(mockSession);
+    expect(result).toContain('1\n00:00:00,000 --> 00:00:30,000\nHello world');
+    expect(result).toContain('2\n00:00:30,000 --> 00:01:00,000\nthis is a test transcript.');
+  });
+
+  it('returns empty string for session with no segments', () => {
+    expect(buildSrtExport(emptySession)).toBe('');
+  });
+
+  it('skips segments without timing', () => {
+    const session: SessionRecord = {
+      ...mockSession,
+      segments: [
+        { idx: 1, ts: 100, text: 'no timing' },
+        { idx: 2, ts: 200, text: 'has timing', startOffsetMs: 5000, endOffsetMs: 10000 },
+      ],
+    };
+    const result = buildSrtExport(session);
+    expect(result).not.toContain('no timing');
+    expect(result).toContain('1\n00:00:05,000 --> 00:00:10,000\nhas timing');
+  });
+
+  it('formats hours correctly for long recordings', () => {
+    const session: SessionRecord = {
+      ...mockSession,
+      segments: [
+        { idx: 1, ts: 100, text: 'hour mark', startOffsetMs: 3661500, endOffsetMs: 3665000 },
+      ],
+    };
+    const result = buildSrtExport(session);
+    expect(result).toContain('01:01:01,500 --> 01:01:05,000');
   });
 });

@@ -10,9 +10,9 @@ import {
   saveSettings,
   saveSttSettings,
   type DefaultSource,
+  type SttProvider,
 } from './settings';
 import './styles.css';
-
 
 function formatDetectedSource(
   diagnostics: Awaited<ReturnType<typeof getSttCredentialSummary>> | null,
@@ -24,18 +24,17 @@ function formatDetectedSource(
   const label = diagnostics.detectedFrom === 'settings.stt.apiKey' ? 'settings.stt.apiKey (canonical)' : 'none';
   return diagnostics.last4 ? `${label} · last4=${diagnostics.last4}` : label;
 }
+
 function parseDefaultSourceInput(source: string): DefaultSource {
   return source === 'tab' || source === 'mix' ? source : 'microphone';
 }
 
 function OptionsPage() {
   const [apiKeyInput, setApiKeyInput] = useState('');
-  const [selectedProvider, setSelectedProvider] = useState<'openai' | 'tencent' | 'aliyun'>('openai');
-  const [tencentSecretIdInput, setTencentSecretIdInput] = useState('');
-  const [tencentSecretKeyInput, setTencentSecretKeyInput] = useState('');
-  const [aliyunAccessKeyIdInput, setAliyunAccessKeyIdInput] = useState('');
-  const [aliyunAccessKeySecretInput, setAliyunAccessKeySecretInput] = useState('');
+  const [deepgramKeyInput, setDeepgramKeyInput] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<SttProvider>('mock');
   const [storedApiKey, setStoredApiKey] = useState('');
+  const [storedDeepgramKey, setStoredDeepgramKey] = useState('');
   const [defaultSource, setDefaultSource] = useState<DefaultSource>(defaults.defaultSource);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +49,8 @@ function OptionsPage() {
   useEffect(() => {
     Promise.all([loadSettings(), loadSttSettings(), getSttCredentialSummary()]).then(([settings, stt, summary]) => {
       setStoredApiKey(stt.apiKey?.trim() ?? '');
+      setStoredDeepgramKey(settings.stt.deepgramApiKey?.trim() ?? '');
+      setSelectedProvider(settings.stt.provider);
       setDefaultSource(settings.defaultSource ?? defaults.defaultSource);
       setSttDiagnostics(summary);
     });
@@ -61,6 +62,7 @@ function OptionsPage() {
     setStatusMessage(null);
 
     const trimmedKey = apiKeyInput.trim();
+    const trimmedDeepgramKey = deepgramKeyInput.trim();
 
     if (apiKeyInput.length > 0 && trimmedKey.length === 0) {
       setError('Whisper API key cannot be only whitespace.');
@@ -71,26 +73,26 @@ function OptionsPage() {
 
     try {
       const previousSettings = await loadSettings();
-      const nextSettings = trimmedKey
-        ? {
-            ...previousSettings,
-            defaultSource,
-            stt: {
-              ...previousSettings.stt,
-              provider: 'openai' as const,
-              apiKey: trimmedKey,
-            },
-          }
-        : {
-            ...previousSettings,
-            defaultSource,
-          };
 
-      await saveSettings(nextSettings);
+      const nextStt = {
+        ...previousSettings.stt,
+        provider: selectedProvider,
+        ...(trimmedKey ? { apiKey: trimmedKey } : {}),
+        ...(trimmedDeepgramKey ? { deepgramApiKey: trimmedDeepgramKey } : {}),
+      };
+
+      await saveSettings({
+        ...previousSettings,
+        defaultSource,
+        stt: nextStt,
+      });
 
       const updatedStt = await loadSttSettings();
       setStoredApiKey(updatedStt.apiKey?.trim() ?? '');
+      const updatedSettings = await loadSettings();
+      setStoredDeepgramKey(updatedSettings.stt.deepgramApiKey?.trim() ?? '');
       setApiKeyInput('');
+      setDeepgramKeyInput('');
       await refreshSttDiagnostics();
       setStatusMessage('Settings saved.');
     } catch (saveError) {
@@ -110,9 +112,12 @@ function OptionsPage() {
       const currentSettings = await loadSettings();
       await saveSettings({ ...currentSettings, defaultSource });
       setStoredApiKey('');
+      setStoredDeepgramKey('');
       setApiKeyInput('');
+      setDeepgramKeyInput('');
+      setSelectedProvider('mock');
       await refreshSttDiagnostics();
-      setStatusMessage('API key cleared.');
+      setStatusMessage('API keys cleared.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to clear API key.');
     } finally {
@@ -120,26 +125,8 @@ function OptionsPage() {
     }
   };
 
-  const handleClearTencentInputs = () => {
-    if (!window.confirm('Clear Tencent credentials?')) return;
-    setTencentSecretIdInput('');
-    setTencentSecretKeyInput('');
-    setStatusMessage('Inputs cleared.');
-  };
-
-  const handleClearAliyunInputs = () => {
-    if (!window.confirm('Clear Aliyun credentials?')) return;
-    setAliyunAccessKeyIdInput('');
-    setAliyunAccessKeySecretInput('');
-    setStatusMessage('Inputs cleared.');
-  };
-
-  const handleUiOnlySave = () => {
-    setError(null);
-    setStatusMessage('Saved (UI only, not persisted).');
-  };
-
-  const keySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
+  const openaiKeySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
+  const deepgramKeySummary = storedDeepgramKey ? `Configured (${maskSecret(storedDeepgramKey)})` : 'Not configured';
 
   return (
     <main className="popup options-page">
@@ -155,20 +142,20 @@ function OptionsPage() {
           <select
             className="form__input"
             id="stt-provider"
-            onChange={(event) => setSelectedProvider(event.target.value as 'openai' | 'tencent' | 'aliyun')}
+            onChange={(event) => setSelectedProvider(event.target.value as SttProvider)}
             value={selectedProvider}
           >
             <option value="openai">OpenAI Whisper</option>
-            <option value="tencent">Tencent</option>
-            <option value="aliyun">Aliyun</option>
+            <option value="deepgram">Deepgram Nova-2</option>
+            <option value="mock">Mock (offline testing)</option>
           </select>
 
-          {selectedProvider === 'openai' ? (
+          {selectedProvider === 'openai' && (
             <>
               <label className="form__label" htmlFor="whisper-api-key-status">
                 Whisper API Key status
               </label>
-              <input className="form__input" id="whisper-api-key-status" readOnly type="text" value={keySummary} />
+              <input className="form__input" id="whisper-api-key-status" readOnly type="text" value={openaiKeySummary} />
 
               <label className="form__label" htmlFor="whisper-api-key">
                 New Whisper API Key (optional)
@@ -181,83 +168,29 @@ function OptionsPage() {
                 type="password"
                 value={apiKeyInput}
               />
-
-              <button className="button" disabled={isSaving} type="submit">
-                {isSaving ? 'Saving...' : 'Save'}
-              </button>
-              <button className="button button--secondary" disabled={isSaving || !storedApiKey} onClick={handleClearApiKey} type="button">
-                Clear API key
-              </button>
             </>
-          ) : null}
+          )}
 
-          {selectedProvider === 'tencent' ? (
+          {selectedProvider === 'deepgram' && (
             <>
-              <label className="form__label" htmlFor="tencent-secret-id">
-                Tencent SecretId
+              <label className="form__label" htmlFor="deepgram-api-key-status">
+                Deepgram API Key status
+              </label>
+              <input className="form__input" id="deepgram-api-key-status" readOnly type="text" value={deepgramKeySummary} />
+
+              <label className="form__label" htmlFor="deepgram-api-key">
+                New Deepgram API Key (optional)
               </label>
               <input
                 className="form__input"
-                id="tencent-secret-id"
-                onChange={(event) => setTencentSecretIdInput(event.target.value)}
+                id="deepgram-api-key"
+                onChange={(event) => setDeepgramKeyInput(event.target.value)}
+                placeholder="dg-..."
                 type="password"
-                value={tencentSecretIdInput}
+                value={deepgramKeyInput}
               />
-
-              <label className="form__label" htmlFor="tencent-secret-key">
-                Tencent SecretKey
-              </label>
-              <input
-                className="form__input"
-                id="tencent-secret-key"
-                onChange={(event) => setTencentSecretKeyInput(event.target.value)}
-                type="password"
-                value={tencentSecretKeyInput}
-              />
-              <p className="status-row__hint">(UI only, not saved)</p>
-
-              <button className="button button--secondary" onClick={handleClearTencentInputs} type="button">
-                Clear Tencent inputs
-              </button>
-              <button className="button" onClick={handleUiOnlySave} type="button">
-                Save
-              </button>
             </>
-          ) : null}
-
-          {selectedProvider === 'aliyun' ? (
-            <>
-              <label className="form__label" htmlFor="aliyun-access-key-id">
-                Aliyun AccessKeyId
-              </label>
-              <input
-                className="form__input"
-                id="aliyun-access-key-id"
-                onChange={(event) => setAliyunAccessKeyIdInput(event.target.value)}
-                type="password"
-                value={aliyunAccessKeyIdInput}
-              />
-
-              <label className="form__label" htmlFor="aliyun-access-key-secret">
-                Aliyun AccessKeySecret
-              </label>
-              <input
-                className="form__input"
-                id="aliyun-access-key-secret"
-                onChange={(event) => setAliyunAccessKeySecretInput(event.target.value)}
-                type="password"
-                value={aliyunAccessKeySecretInput}
-              />
-              <p className="status-row__hint">(UI only, not saved)</p>
-
-              <button className="button button--secondary" onClick={handleClearAliyunInputs} type="button">
-                Clear Aliyun inputs
-              </button>
-              <button className="button" onClick={handleUiOnlySave} type="button">
-                Save
-              </button>
-            </>
-          ) : null}
+          )}
 
           <label className="form__label" htmlFor="default-source">
             Default audio source
@@ -276,12 +209,19 @@ function OptionsPage() {
           </select>
           <p className="status-row__hint">Use Microphone for ambient voice, Tab audio for playback, or Mix for both.</p>
 
+          <button className="button" disabled={isSaving} type="submit">
+            {isSaving ? 'Saving...' : 'Save'}
+          </button>
+          <button className="button button--secondary" disabled={isSaving || (!storedApiKey && !storedDeepgramKey)} onClick={handleClearApiKey} type="button">
+            Clear API keys
+          </button>
+
           {statusMessage ? <p className="success">{statusMessage}</p> : null}
           {error ? <p className="error">{error}</p> : null}
         </form>
 
         <div className="panel" style={{ marginTop: '1rem' }}>
-          <h2 style={{ marginTop: 0 }}>STT diagnostics (safe)</h2>
+          <h2 style={{ marginTop: 0 }}>STT diagnostics</h2>
           <p>Provider: {sttDiagnostics?.provider ?? 'unknown'}</p>
           <p>Configured: {sttDiagnostics?.configured ? 'true' : 'false'}</p>
           <p>Last4: {sttDiagnostics?.last4 ?? 'n/a'}</p>

@@ -2,34 +2,21 @@ import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, broadcas
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
-import { CHUNK_MIN_BYTES, LIVE_TRANSCRIBE_CHUNK_COUNT, MIN_OVERLAP_DEDUP_WORDS, MAX_OVERLAP_DEDUP_WORDS } from './constants';
-
-const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
-const HEADER_SCAN_LIMIT_BYTES = 512 * 1024;
-
-function findMarkerIndex(buf: Uint8Array, marker: readonly number[]): number {
-  for (let i = 0; i <= buf.length - marker.length; i++) {
-    if (buf[i] === marker[0] && buf[i + 1] === marker[1] && buf[i + 2] === marker[2] && buf[i + 3] === marker[3]) {
-      return i;
-    }
-  }
-  return -1;
-}
+import { CHUNK_MIN_BYTES, LIVE_TRANSCRIBE_CHUNK_COUNT } from './constants';
+import { extractWebmHeaderFromBlob } from '../utils/webm';
+import { removeOverlapPrefix } from '../utils/dedup';
 
 async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   if (state.webmHeaderExtracted) return;
   state.webmHeaderExtracted = true;
 
-  const bytes = new Uint8Array(await firstBlob.arrayBuffer());
-  const scanLen = Math.min(bytes.length, HEADER_SCAN_LIMIT_BYTES);
-  const idx = findMarkerIndex(bytes.subarray(0, scanLen), CLUSTER_MARKER);
-
-  if (idx < 0 || idx > bytes.length - CLUSTER_MARKER.length) {
+  const header = await extractWebmHeaderFromBlob(firstBlob);
+  if (!header) {
     console.info('[live-transcribe] no WebM header found in first chunk');
     return;
   }
 
-  state.webmHeader = new Uint8Array(bytes.slice(0, idx));
+  state.webmHeader = header;
   console.info(`[live-transcribe] WebM header extracted: ${state.webmHeader.byteLength} bytes`);
 }
 
@@ -47,28 +34,6 @@ function buildTranscribableBlob(chunks: Array<{ blob: Blob }>): Blob {
   }
 
   return new Blob(parts, { type: 'audio/webm' });
-}
-
-function removeOverlapPrefix(existing: string, incoming: string): string {
-  const normalizeWord = (w: string) => w.toLowerCase().replace(/(^[^a-z0-9']+|[^a-z0-9']+$)/gi, '');
-  const existingWords = existing.trim().split(/\s+/).filter(Boolean);
-  const incomingWords = incoming.trim().split(/\s+/).filter(Boolean);
-
-  if (existingWords.length === 0 || incomingWords.length === 0) return incoming.trim();
-
-  const tailWords = existingWords.slice(-MAX_OVERLAP_DEDUP_WORDS).map(normalizeWord).filter(Boolean);
-  const headWords = incomingWords.map(normalizeWord).filter(Boolean);
-  const maxOverlap = Math.min(tailWords.length, headWords.length, MAX_OVERLAP_DEDUP_WORDS);
-
-  for (let size = maxOverlap; size >= MIN_OVERLAP_DEDUP_WORDS; size--) {
-    const suffix = tailWords.slice(-size);
-    const prefix = headWords.slice(0, size);
-    if (suffix.every((w, i) => w === prefix[i])) {
-      return incomingWords.slice(size).join(' ').trim();
-    }
-  }
-
-  return incoming.trim();
 }
 
 export function enqueueChunkForLiveTranscription(blob: Blob, seq: number, createdAt: number): void {

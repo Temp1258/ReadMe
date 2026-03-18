@@ -4,12 +4,11 @@ import { transcribeWithDeepgram } from '../stt/deepgram';
 import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, updateStatus, broadcast } from './state';
 import {
   CHUNK_MIN_BYTES,
-  MIN_OVERLAP_DEDUP_WORDS,
-  MAX_OVERLAP_DEDUP_WORDS,
   TRANSCRIBE_MAX_RETRIES,
   TRANSCRIBE_INITIAL_BACKOFF_MS,
   MAX_SEGMENT_BYTES,
 } from './constants';
+import { removeOverlapPrefix } from '../utils/dedup';
 
 function getChunkFilename(seq: number, mimeType: string): string {
   const normalizedMimeType = mimeType.toLowerCase();
@@ -38,38 +37,6 @@ export async function appendTranscript(
   if (!normalizedIncoming) {
     return;
   }
-
-  const normalizeWord = (word: string): string => word.toLowerCase().replace(/(^[^a-z0-9']+|[^a-z0-9']+$)/gi, '');
-
-  const removeOverlapPrefix = (existingTranscript: string, incomingText: string): string => {
-    const existingWords = existingTranscript.trim().split(/\s+/).filter(Boolean);
-    const incomingWords = incomingText.trim().split(/\s+/).filter(Boolean);
-
-    if (existingWords.length === 0 || incomingWords.length === 0) {
-      return incomingText.trim();
-    }
-
-    const existingTailWords = existingWords
-      .slice(-MAX_OVERLAP_DEDUP_WORDS)
-      .map((word) => normalizeWord(word))
-      .filter(Boolean);
-    const incomingNormalizedWords = incomingWords.map((word) => normalizeWord(word)).filter(Boolean);
-
-    const maxOverlap = Math.min(existingTailWords.length, incomingNormalizedWords.length, MAX_OVERLAP_DEDUP_WORDS);
-
-    for (let overlapSize = maxOverlap; overlapSize >= MIN_OVERLAP_DEDUP_WORDS; overlapSize -= 1) {
-      const existingSuffix = existingTailWords.slice(-overlapSize);
-      const incomingPrefix = incomingNormalizedWords.slice(0, overlapSize);
-      const isMatch = existingSuffix.every((word, idx) => word === incomingPrefix[idx]);
-
-      if (isMatch) {
-        const dedupedWords = incomingWords.slice(overlapSize).join(' ').trim();
-        return dedupedWords;
-      }
-    }
-
-    return incomingText.trim();
-  };
 
   const normalized = removeOverlapPrefix(state.transcript, normalizedIncoming);
   if (!normalized) {

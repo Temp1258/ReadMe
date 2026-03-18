@@ -7,43 +7,7 @@ import {
   SEGMENT_TRANSCRIPT_OVERLAP_MS,
 } from './constants';
 import { transcribeSegmentBlob } from './transcription';
-
-const CLUSTER_MARKER = [0x1f, 0x43, 0xb6, 0x75] as const;
-const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3] as const;
-const HEADER_SCAN_LIMIT_BYTES = 1024 * 1024;
-
-function findMarkerIndex(buf: Uint8Array, marker: readonly number[]): number {
-  for (let idx = 0; idx <= buf.length - marker.length; idx += 1) {
-    if (
-      buf[idx] === marker[0] &&
-      buf[idx + 1] === marker[1] &&
-      buf[idx + 2] === marker[2] &&
-      buf[idx + 3] === marker[3]
-    ) {
-      return idx;
-    }
-  }
-
-  return -1;
-}
-
-function bytesToHex(buf: Uint8Array): string {
-  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join(' ');
-}
-
-function startsWithMarker(buf: Uint8Array, marker: readonly number[]): boolean {
-  if (buf.length < marker.length) {
-    return false;
-  }
-
-  for (let idx = 0; idx < marker.length; idx += 1) {
-    if (buf[idx] !== marker[idx]) {
-      return false;
-    }
-  }
-
-  return true;
-}
+import { CLUSTER_MARKER, EBML_MAGIC, HEADER_SCAN_LIMIT_BYTES, findMarkerIndex, startsWithMarker, bytesToHex } from '../utils/webm';
 
 type SegmentChunk = {
   blob: Blob;
