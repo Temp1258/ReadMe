@@ -5,7 +5,7 @@ const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
 const UI_THEME_STORAGE_KEY = 'uiTheme';
 const UI_LANG_STORAGE_KEY = 'uiLang';
-export const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
+export const OFFSCREEN_DOCUMENT_PATH = 'dist/src/offscreen.html';
 
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
@@ -192,8 +192,8 @@ export async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: s
       return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: response.error || 'Unable to read STT settings.' };
     }
 
-    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : 'Mock';
-    const configurationLabel = response.provider === 'openai' && response.keyPresent ? 'Configured' : 'Not configured';
+    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : response.provider === 'deepgram' ? 'Deepgram Nova-2' : 'Mock';
+    const configurationLabel = (response.provider === 'openai' || response.provider === 'deepgram') && response.keyPresent ? 'Configured' : 'Not configured';
 
     return { providerLabel, configurationLabel };
   } catch (error) {

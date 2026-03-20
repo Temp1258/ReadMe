@@ -167,30 +167,12 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
   } catch (e) {
     console.error('[loadSttSettings] resolveStorageBackend failed:', e);
     const settings = cloneDefaults();
-    const apiKey = trimApiKey(settings.stt.apiKey);
-    const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
-
-    return {
-      provider,
-      ...(provider === 'openai' ? { apiKey } : {}),
-      detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
-      storageArea: 'local',
-      backend: 'chrome.storage.local',
-    };
+    return buildSttLoadResult(settings);
   }
 
   if (backend !== 'chrome.storage.local') {
     const settings = cloneDefaults();
-    const apiKey = trimApiKey(settings.stt.apiKey);
-    const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
-
-    return {
-      provider,
-      ...(provider === 'openai' ? { apiKey } : {}),
-      detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
-      storageArea: 'local',
-      backend: 'chrome.storage.local',
-    };
+    return buildSttLoadResult(settings);
   }
 
   let settings: ExtensionSettings;
@@ -200,23 +182,39 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
     settings = cloneDefaults();
   }
 
+  return buildSttLoadResult(settings);
+}
+
+function buildSttLoadResult(settings: ExtensionSettings): SttSettingsLoadResult {
   const apiKey = trimApiKey(settings.stt.apiKey);
-  const provider: SttProvider = settings.stt.provider === 'openai' && apiKey ? 'openai' : 'mock';
+  const deepgramApiKey = trimApiKey(settings.stt.deepgramApiKey);
+  const provider = settings.stt.provider;
+
+  const detectedFrom: SttDetectedFrom =
+    (provider === 'openai' && apiKey) || (provider === 'deepgram' && deepgramApiKey)
+      ? 'settings.stt.apiKey'
+      : 'none';
 
   return {
     provider,
-    ...(provider === 'openai' ? { apiKey } : {}),
-    detectedFrom: provider === 'openai' ? 'settings.stt.apiKey' : 'none',
+    ...(provider === 'openai' && apiKey ? { apiKey } : {}),
+    ...(provider === 'deepgram' && deepgramApiKey ? { deepgramApiKey } : {}),
+    detectedFrom,
     storageArea: 'local',
     backend: 'chrome.storage.local',
   };
 }
 
-export async function saveSttSettings(stt: { apiKey?: string; provider?: SttProvider }): Promise<void> {
+export async function saveSttSettings(stt: { apiKey?: string; deepgramApiKey?: string; provider?: SttProvider }): Promise<void> {
   const settings = await loadSettings();
   const nextApiKey = trimApiKey(stt.apiKey);
-  const nextStt: SttSettings =
-    stt.provider === 'openai' && nextApiKey ? { provider: 'openai', apiKey: nextApiKey } : { provider: 'mock' };
+  const nextDeepgramApiKey = trimApiKey(stt.deepgramApiKey);
+
+  const nextStt: SttSettings = {
+    provider: stt.provider ?? settings.stt.provider,
+    ...(nextApiKey ? { apiKey: nextApiKey } : {}),
+    ...(nextDeepgramApiKey ? { deepgramApiKey: nextDeepgramApiKey } : {}),
+  };
 
   await saveSettings({
     ...settings,
@@ -227,12 +225,18 @@ export async function saveSttSettings(stt: { apiKey?: string; provider?: SttProv
 export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
   const stt = await loadSttSettings();
   const apiKey = trimApiKey(stt.apiKey);
-  const configured = stt.provider === 'openai' && Boolean(apiKey);
+  const deepgramApiKey = trimApiKey(stt.deepgramApiKey);
+
+  const configured =
+    (stt.provider === 'openai' && Boolean(apiKey)) ||
+    (stt.provider === 'deepgram' && Boolean(deepgramApiKey));
+
+  const activeKey = stt.provider === 'deepgram' ? deepgramApiKey : apiKey;
 
   return {
     configured,
-    provider: configured ? 'openai' : 'mock',
-    ...(configured ? { last4: apiKey.slice(-4) } : {}),
+    provider: configured ? stt.provider : 'mock',
+    ...(configured && activeKey ? { last4: activeKey.slice(-4) } : {}),
     backend: stt.backend,
     detectedFrom: stt.detectedFrom,
   };

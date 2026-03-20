@@ -103,13 +103,15 @@ async function transcribeBatch(
     let text: string;
     if (activeProvider === 'deepgram' && deepgramKey) {
       text = await transcribeWithDeepgram(mergedBlob, { apiKey: deepgramKey });
-    } else {
+    } else if (apiKey) {
       text = await transcribeAudioBlob(mergedBlob, {
-        apiKey: apiKey!,
+        apiKey,
         model: 'whisper-1',
         fileName: `live-${startSeq}-${endSeq}.webm`,
         maxRetries: 2,
       });
+    } else {
+      return;
     }
 
     const trimmed = text?.trim();
