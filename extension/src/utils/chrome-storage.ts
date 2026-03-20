@@ -5,7 +5,7 @@ const AUDIO_DEVICE_STORAGE_KEY = 'selectedAudioDeviceId';
 const AUDIO_SOURCE_STORAGE_KEY = 'selectedAudioSource';
 const UI_THEME_STORAGE_KEY = 'uiTheme';
 const UI_LANG_STORAGE_KEY = 'uiLang';
-export const OFFSCREEN_DOCUMENT_PATH = 'dist/src/offscreen.html';
+export const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 
 type ChromeStorageArea = {
   get: (keys: string | string[] | null, callback: (items: Record<string, unknown>) => void) => void;
