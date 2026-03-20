@@ -211,7 +211,6 @@ export async function saveSttSettings(stt: { apiKey?: string; deepgramApiKey?: s
   const nextDeepgramApiKey = trimApiKey(stt.deepgramApiKey);
 
   const nextStt: SttSettings = {
-    ...settings.stt,
     provider: stt.provider ?? settings.stt.provider,
     ...(nextApiKey ? { apiKey: nextApiKey } : {}),
     ...(nextDeepgramApiKey ? { deepgramApiKey: nextDeepgramApiKey } : {}),
