@@ -6,8 +6,6 @@ type GetSttSettingsSuccess = {
   ok: true;
   provider: SttProvider;
   keyPresent: boolean;
-  apiKey?: string;
-  deepgramApiKey?: string;
 };
 
 type GetSttSettingsFailure = {
@@ -73,8 +71,6 @@ async function resolveSttSettings(): Promise<GetSttSettingsSuccess> {
     ok: true,
     provider: parsed.provider,
     keyPresent: parsed.keyPresent,
-    ...(parsed.apiKey ? { apiKey: parsed.apiKey } : {}),
-    ...(parsed.deepgramApiKey ? { deepgramApiKey: parsed.deepgramApiKey } : {}),
   };
 }
 
