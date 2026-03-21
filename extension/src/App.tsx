@@ -207,6 +207,10 @@ function App() {
           ],
         });
       } catch (deviceError) {
+        dispatch({
+          type: 'SET_DEVICES',
+          payload: [{ id: 'default', label: 'System default microphone' }],
+        });
         const message = deviceError instanceof Error ? deviceError.message : String(deviceError);
         dispatch({ type: 'SET_ERROR', payload: `Unable to enumerate microphones: ${message}` });
       }

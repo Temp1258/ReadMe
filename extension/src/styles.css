@@ -735,6 +735,7 @@ h3 {
   flex: 1;
   flex-direction: column;
   gap: var(--space-2);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -751,12 +752,14 @@ h3 {
 .settings-toggle-row {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
 }
 
 .inline-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
