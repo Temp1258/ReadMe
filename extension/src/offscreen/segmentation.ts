@@ -7,6 +7,7 @@ import {
   SEGMENT_TRANSCRIPT_OVERLAP_MS,
 } from './constants';
 import { transcribeSegmentBlob } from './transcription';
+import { state, updateStatus } from './state';
 import { CLUSTER_MARKER, EBML_MAGIC, HEADER_SCAN_LIMIT_BYTES, findMarkerIndex, startsWithMarker, bytesToHex } from '../utils/webm';
 
 type SegmentChunk = {
@@ -312,6 +313,9 @@ export async function transcribeRecordingInSegments(recordingSession: RecordingS
     return overlapChunks;
   };
 
+  state.totalChunksToTranscribe = totalSegments;
+  state.transcribedChunks = 0;
+
   for (const [index, segment] of segmentBlobs.entries()) {
     const segNumber = index + 1;
     let transcribeBlob = segment.blob;
@@ -352,5 +356,8 @@ export async function transcribeRecordingInSegments(recordingSession: RecordingS
       startOffsetMs: segment.startOffsetMs,
       endOffsetMs: segment.endOffsetMs,
     });
+
+    state.transcribedChunks = segNumber;
+    updateStatus(state.status, state.detail);
   }
 }

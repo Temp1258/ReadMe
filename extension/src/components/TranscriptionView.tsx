@@ -1,4 +1,3 @@
-import { useRef, useEffect } from 'react';
 import type { AudioStatus, AudioSource, RecordingDiagnostics, DeviceOption } from '../types';
 import type { TranslationKey } from '../i18n';
 import { normalizeAudioSource } from '../utils/format';
@@ -42,15 +41,12 @@ export function TranscriptionView({
   onDeviceChange,
   onLearnMoreClick,
 }: TranscriptionViewProps) {
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!transcriptRef.current) {
-      return;
-    }
-
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [transcriptText]);
+  const { transcribedChunks, totalChunksToTranscribe } = recordingDiagnostics;
+  const isTranscribing = status === 'Listening' || status === 'Transcribing';
+  const hasProgress = totalChunksToTranscribe > 0;
+  const progressPct = hasProgress
+    ? Math.min(100, (transcribedChunks / totalChunksToTranscribe) * 100)
+    : 0;
 
   return (
     <section className="transcription-view">
@@ -154,14 +150,28 @@ export function TranscriptionView({
 
       {error && <p className="error">{error}</p>}
 
-      <section className="transcript-panel">
-        <div className="transcript-panel__header">
-          <h2>{t('transcriptTitle')}</h2>
+      <section className="transcript-progress-panel">
+        <div className="transcript-progress-panel__header">
+          <h2>{t('transcriptionProgress')}</h2>
           <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
         </div>
-        <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-          {!transcriptText ? <p className="transcript__line transcript__line--muted">{t('transcriptEmpty')}</p> : null}
-          {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
+        <div className="transcript-progress-bar">
+          <div
+            className={`transcript-progress-bar__fill ${isTranscribing && hasProgress ? 'transcript-progress-bar__fill--active' : ''}`}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+        <div className="transcript-progress-bar__info">
+          {hasProgress ? (
+            <span>{transcribedChunks} / {totalChunksToTranscribe} chunks ({Math.round(progressPct)}%)</span>
+          ) : (
+            <span>{status === 'Idle' ? t('transcriptEmpty') : t('liveTranscribing')}</span>
+          )}
+          {transcriptText && (
+            <span className="transcript-progress-bar__hint">
+              {transcriptText.length > 60 ? `…${transcriptText.slice(-60)}` : transcriptText}
+            </span>
+          )}
         </div>
       </section>
     </section>

@@ -1,4 +1,4 @@
-import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, broadcast } from './state';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, broadcast, updateStatus } from './state';
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
@@ -40,6 +40,7 @@ export function enqueueChunkForLiveTranscription(blob: Blob, seq: number, create
   if (!state.liveTranscribeEnabled || state.useMockTranscription) return;
 
   state.liveTranscribeQueue.push({ blob, seq, createdAt });
+  state.totalChunksToTranscribe = seq;
 
   if (seq === 1) {
     void extractWebmHeader(blob);
@@ -115,10 +116,18 @@ async function transcribeBatch(
     }
 
     const trimmed = text?.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      state.transcribedChunks = endSeq;
+      updateStatus(state.status, state.detail);
+      return;
+    }
 
     const deduped = removeOverlapPrefix(state.transcript, trimmed);
-    if (!deduped) return;
+    if (!deduped) {
+      state.transcribedChunks = endSeq;
+      updateStatus(state.status, state.detail);
+      return;
+    }
 
     const recordingSession = state.recordingSession;
     const startOffsetMs = recordingSession
@@ -146,6 +155,9 @@ async function transcribeBatch(
         transcript: state.transcript,
       },
     });
+
+    state.transcribedChunks = endSeq;
+    updateStatus(state.status, state.detail);
 
     console.info(`[live-transcribe] success chunks ${startSeq}-${endSeq}: "${deduped.slice(0, 80)}..."`);
   } catch (error) {

@@ -9,6 +9,8 @@ export type RecordingDiagnostics = {
   totalMB: number;
   mbPerMin: number;
   estMinTo25MB: number | null;
+  transcribedChunks: number;
+  totalChunksToTranscribe: number;
 };
 
 export type UITheme = 'light' | 'dark';

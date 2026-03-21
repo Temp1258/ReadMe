@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { SessionRecord, SessionAiSummary } from '../db/indexeddb';
 import type { TranslationKey } from '../i18n';
 import { formatTimestamp, formatDuration } from '../utils/format';
@@ -19,6 +19,7 @@ type NotesViewProps = {
   onSelectSession: (id: string) => void;
   onExport: (format: 'txt' | 'md' | 'srt') => void;
   onSummarize: (sessionId: string) => void;
+  onDeleteSession: (sessionId: string) => void;
 };
 
 function AiSummaryPanel({ summary, t }: { summary: SessionAiSummary; t: (key: TranslationKey) => string }) {
@@ -69,7 +70,10 @@ export function NotesView({
   onSelectSession,
   onExport,
   onSummarize,
+  onDeleteSession,
 }: NotesViewProps) {
+  const [detailTab, setDetailTab] = useState<'transcript' | 'summary'>('transcript');
+
   const filteredSessions = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) {
@@ -86,6 +90,8 @@ export function NotesView({
 
     return filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0] ?? null;
   }, [filteredSessions, selectedSessionId]);
+
+  const hasSummary = !!selectedSession?.aiSummary;
 
   return (
     <section className="notes-view">
@@ -123,26 +129,44 @@ export function NotesView({
             const duration = formatDuration(session.startedAt, session.endedAt);
 
             return (
-              <button
-                aria-pressed={selectedSession?.id === session.id}
+              <div
                 className={`notes-list__item ${selectedSession?.id === session.id ? 'notes-list__item--active' : ''}`}
                 key={session.id}
-                onClick={() => onSelectSession(session.id)}
-                type="button"
               >
-                <div className="notes-list__title-row">
-                  <p className="notes-list__time">{formatTimestamp(session.startedAt)}</p>
-                  <span className={`status-indicator status-indicator--${session.status}`}>{session.status}</span>
-                </div>
-                <p className="notes-list__meta">
-                  Transcript #{index + 1}
-                  {session.aiSummary ? ' • AI' : ''}
-                </p>
-                <p className="notes-list__meta">
-                  {session.source}
-                  {duration ? ` • ${duration}` : ''}
-                </p>
-              </button>
+                <button
+                  aria-pressed={selectedSession?.id === session.id}
+                  className="notes-list__item-content"
+                  onClick={() => onSelectSession(session.id)}
+                  type="button"
+                >
+                  <div className="notes-list__title-row">
+                    <p className="notes-list__time">{formatTimestamp(session.startedAt)}</p>
+                    <span className={`status-indicator status-indicator--${session.status}`}>{session.status}</span>
+                  </div>
+                  <p className="notes-list__meta">
+                    Transcript #{index + 1}
+                    {session.aiSummary ? ' • AI' : ''}
+                  </p>
+                  <p className="notes-list__meta">
+                    {session.source}
+                    {duration ? ` • ${duration}` : ''}
+                  </p>
+                </button>
+                <button
+                  className="notes-list__delete-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(t('deleteConfirm'))) {
+                      onDeleteSession(session.id);
+                    }
+                  }}
+                  type="button"
+                  title={t('deleteSession')}
+                  aria-label={t('deleteSession')}
+                >
+                  ✕
+                </button>
+              </div>
             );
           })}
         </div>
@@ -182,17 +206,36 @@ export function NotesView({
 
               <AudioPlayer sessionId={selectedSession.id} t={t} />
 
-              {selectedSession.aiSummary && (
-                <AiSummaryPanel summary={selectedSession.aiSummary} t={t} />
+              {hasSummary && (
+                <div className="notes-detail__tab-bar">
+                  <button
+                    className={`notes-detail__tab ${detailTab === 'transcript' ? 'notes-detail__tab--active' : ''}`}
+                    onClick={() => setDetailTab('transcript')}
+                    type="button"
+                  >
+                    {t('showTranscript')}
+                  </button>
+                  <button
+                    className={`notes-detail__tab ${detailTab === 'summary' ? 'notes-detail__tab--active' : ''}`}
+                    onClick={() => setDetailTab('summary')}
+                    type="button"
+                  >
+                    {t('showSummary')}
+                  </button>
+                </div>
               )}
 
-              <div className="transcript notes-detail__transcript">
-                {selectedSession.transcript ? (
-                  <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
-                ) : (
-                  <p className="transcript__line transcript__line--muted">{t('noTranscriptYet')}</p>
-                )}
-              </div>
+              {hasSummary && detailTab === 'summary' ? (
+                <AiSummaryPanel summary={selectedSession.aiSummary!} t={t} />
+              ) : (
+                <div className="transcript notes-detail__transcript">
+                  {selectedSession.transcript ? (
+                    <p className="transcript__line transcript__line--preserve">{selectedSession.transcript}</p>
+                  ) : (
+                    <p className="transcript__line transcript__line--muted">{t('noTranscriptYet')}</p>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>

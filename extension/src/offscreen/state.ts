@@ -12,6 +12,8 @@ export type RecordingDiagnostics = {
   totalMB: number;
   mbPerMin: number;
   estMinTo25MB: number | null;
+  transcribedChunks: number;
+  totalChunksToTranscribe: number;
 };
 
 export type RuntimeEventMessage =
@@ -62,6 +64,8 @@ export const state = {
   liveTranscribeRunning: false,
   webmHeader: null as Uint8Array | null,
   webmHeaderExtracted: false,
+  transcribedChunks: 0,
+  totalChunksToTranscribe: 0,
 };
 
 export let inMemoryApiKey: string | null = null;
@@ -104,6 +108,8 @@ export function computeDiagnostics(): RecordingDiagnostics {
       totalMB: 0,
       mbPerMin: 0,
       estMinTo25MB: null,
+      transcribedChunks: state.transcribedChunks,
+      totalChunksToTranscribe: state.totalChunksToTranscribe,
     };
   }
 
@@ -120,6 +126,8 @@ export function computeDiagnostics(): RecordingDiagnostics {
     totalMB,
     mbPerMin,
     estMinTo25MB: mbPerMin > 0 ? remainingMB / mbPerMin : null,
+    transcribedChunks: state.transcribedChunks,
+    totalChunksToTranscribe: state.totalChunksToTranscribe,
   };
 }
 

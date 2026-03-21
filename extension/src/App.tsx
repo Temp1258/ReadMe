@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react';
-import { clearSessions, getLatestSession, listSessions, updateSessionAiSummary } from './db/indexeddb';
+import { clearSessions, deleteSession, getLatestSession, listSessions, updateSessionAiSummary } from './db/indexeddb';
 import { loadSettings } from './settings';
 import type { AudioSource, RuntimeEventMessage } from './types';
 import { createTranslator } from './i18n';
@@ -356,6 +356,16 @@ function App() {
     }
   };
 
+  const handleDeleteSession = async (sessionId: string) => {
+    try {
+      await deleteSession(sessionId);
+      dispatch({ type: 'DELETE_SESSION', payload: sessionId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete session.';
+      dispatch({ type: 'SET_NOTES_ERROR', payload: message });
+    }
+  };
+
   const handleSummarize = async (sessionId: string) => {
     const session = notesSessions.find((s) => s.id === sessionId);
     if (!session || !session.transcript) return;
@@ -479,6 +489,7 @@ function App() {
           onSelectSession={(id) => dispatch({ type: 'SET_SELECTED_SESSION', payload: id })}
           onExport={handleExportSession}
           onSummarize={handleSummarize}
+          onDeleteSession={handleDeleteSession}
         />
       ) : null}
 

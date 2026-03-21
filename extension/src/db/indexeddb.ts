@@ -252,6 +252,29 @@ export async function clearSessions(): Promise<void> {
   await transactionDone(tx);
 }
 
+export async function deleteSession(id: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(
+    [STORE_NAME, RECORDING_SESSION_STORE_NAME, RECORDING_CHUNK_STORE_NAME],
+    'readwrite',
+  );
+  tx.objectStore(STORE_NAME).delete(id);
+  tx.objectStore(RECORDING_SESSION_STORE_NAME).delete(id);
+
+  const chunkIndex = tx.objectStore(RECORDING_CHUNK_STORE_NAME).index(RECORDING_CHUNK_SESSION_SEQ_INDEX);
+  const range = IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]);
+  const cursorReq = chunkIndex.openKeyCursor(range);
+  cursorReq.onsuccess = () => {
+    const cursor = cursorReq.result;
+    if (cursor) {
+      tx.objectStore(RECORDING_CHUNK_STORE_NAME).delete(cursor.primaryKey);
+      cursor.continue();
+    }
+  };
+
+  await transactionDone(tx);
+}
+
 export async function createRecordingSession(session: RecordingSessionRecord): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(RECORDING_SESSION_STORE_NAME, 'readwrite');
