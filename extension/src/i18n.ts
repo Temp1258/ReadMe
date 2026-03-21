@@ -68,6 +68,11 @@ export const UI_COPY = {
     playbackPause: 'Pause',
     liveTranscribing: 'Live transcribing...',
     deepgramApiKey: 'Deepgram API Key',
+    deleteSession: 'Delete',
+    deleteConfirm: 'Delete this transcript?',
+    showTranscript: 'Transcript',
+    showSummary: 'Summary',
+    transcriptionProgress: 'Transcription progress',
   },
   zh: {
     appTitle: 'ReadMe',
@@ -135,6 +140,11 @@ export const UI_COPY = {
     playbackPause: '暂停',
     liveTranscribing: '实时转录中...',
     deepgramApiKey: 'Deepgram API Key',
+    deleteSession: '删除',
+    deleteConfirm: '确认删除此转录？',
+    showTranscript: '原文',
+    showSummary: '摘要',
+    transcriptionProgress: '转录进度',
   },
 } as const;
 

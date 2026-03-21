@@ -71,7 +71,8 @@ export type AppAction =
   | { type: 'SET_UI_LANG'; payload: UILang }
   | { type: 'UPDATE_SESSION'; payload: { id: string; updates: Partial<SessionRecord> } }
   | { type: 'SYNC_RECORDING_STATE'; payload: Partial<Pick<AppState, 'status' | 'selectedDeviceId' | 'selectedSource' | 'transcriptText' | 'recordingDiagnostics'>> }
-  | { type: 'CLEAR_ALL_SESSIONS' };
+  | { type: 'CLEAR_ALL_SESSIONS' }
+  | { type: 'DELETE_SESSION'; payload: string };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -120,6 +121,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case 'SYNC_RECORDING_STATE':
       return { ...state, ...action.payload };
+    case 'DELETE_SESSION': {
+      const remaining = state.notesSessions.filter((s) => s.id !== action.payload);
+      return {
+        ...state,
+        notesSessions: remaining,
+        selectedSessionId: state.selectedSessionId === action.payload ? null : state.selectedSessionId,
+      };
+    }
     case 'CLEAR_ALL_SESSIONS':
       return {
         ...state,

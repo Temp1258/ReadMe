@@ -97,7 +97,27 @@ export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
   };
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current && isFinite(audioRef.current.duration)) {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isFinite(audio.duration) && audio.duration > 0) {
+      setDuration(audio.duration);
+    } else {
+      // WebM files often report Infinity duration. Force a seek to discover real duration.
+      const onSeeked = () => {
+        audio.removeEventListener('seeked', onSeeked);
+        if (isFinite(audio.duration) && audio.duration > 0) {
+          setDuration(audio.duration);
+        }
+        audio.currentTime = 0;
+      };
+      audio.addEventListener('seeked', onSeeked);
+      audio.currentTime = 1e10;
+    }
+  };
+
+  const handleDurationChange = () => {
+    if (audioRef.current && isFinite(audioRef.current.duration) && audioRef.current.duration > 0) {
       setDuration(audioRef.current.duration);
     }
   };
@@ -131,6 +151,7 @@ export function AudioPlayer({ sessionId, t }: AudioPlayerProps) {
         src={blobUrl}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
+        onDurationChange={handleDurationChange}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={() => setIsPlaying(false)}

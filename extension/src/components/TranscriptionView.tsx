@@ -1,4 +1,3 @@
-import { useRef, useEffect } from 'react';
 import type { AudioStatus, AudioSource, RecordingDiagnostics, DeviceOption } from '../types';
 import type { TranslationKey } from '../i18n';
 import { normalizeAudioSource } from '../utils/format';
@@ -42,15 +41,9 @@ export function TranscriptionView({
   onDeviceChange,
   onLearnMoreClick,
 }: TranscriptionViewProps) {
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!transcriptRef.current) {
-      return;
-    }
-
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [transcriptText]);
+  const maxMB = 25;
+  const progressPct = Math.min(100, (recordingDiagnostics.totalMB / maxMB) * 100);
+  const hasTranscript = transcriptText.length > 0;
 
   return (
     <section className="transcription-view">
@@ -154,14 +147,24 @@ export function TranscriptionView({
 
       {error && <p className="error">{error}</p>}
 
-      <section className="transcript-panel">
-        <div className="transcript-panel__header">
-          <h2>{t('transcriptTitle')}</h2>
+      <section className="transcript-progress-panel">
+        <div className="transcript-progress-panel__header">
+          <h2>{t('transcriptionProgress')}</h2>
           <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
         </div>
-        <div aria-live="polite" className="transcript" ref={transcriptRef} role="log">
-          {!transcriptText ? <p className="transcript__line transcript__line--muted">{t('transcriptEmpty')}</p> : null}
-          {transcriptText ? <p className="transcript__line transcript__line--preserve">{transcriptText}</p> : null}
+        <div className="transcript-progress-bar">
+          <div
+            className={`transcript-progress-bar__fill ${isRecordingActive ? 'transcript-progress-bar__fill--active' : ''}`}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+        <div className="transcript-progress-bar__info">
+          <span>{recordingDiagnostics.totalMB.toFixed(2)} / {maxMB} MB</span>
+          {hasTranscript && (
+            <span className="transcript-progress-bar__hint">
+              {transcriptText.length > 60 ? `…${transcriptText.slice(-60)}` : transcriptText}
+            </span>
+          )}
         </div>
       </section>
     </section>
