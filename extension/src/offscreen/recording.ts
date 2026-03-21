@@ -378,6 +378,8 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
     timesliceMs: CHUNK_TIMESLICE_MS,
   };
   state.nextChunkSeq = 1;
+  state.transcribedChunks = 0;
+  state.totalChunksToTranscribe = 0;
 
   try {
     await createRecordingSession(state.recordingSession);

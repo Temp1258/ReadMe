@@ -41,9 +41,12 @@ export function TranscriptionView({
   onDeviceChange,
   onLearnMoreClick,
 }: TranscriptionViewProps) {
-  const maxMB = 25;
-  const progressPct = Math.min(100, (recordingDiagnostics.totalMB / maxMB) * 100);
-  const hasTranscript = transcriptText.length > 0;
+  const { transcribedChunks, totalChunksToTranscribe } = recordingDiagnostics;
+  const isTranscribing = status === 'Listening' || status === 'Transcribing';
+  const hasProgress = totalChunksToTranscribe > 0;
+  const progressPct = hasProgress
+    ? Math.min(100, (transcribedChunks / totalChunksToTranscribe) * 100)
+    : 0;
 
   return (
     <section className="transcription-view">
@@ -154,13 +157,17 @@ export function TranscriptionView({
         </div>
         <div className="transcript-progress-bar">
           <div
-            className={`transcript-progress-bar__fill ${isRecordingActive ? 'transcript-progress-bar__fill--active' : ''}`}
+            className={`transcript-progress-bar__fill ${isTranscribing && hasProgress ? 'transcript-progress-bar__fill--active' : ''}`}
             style={{ width: `${progressPct}%` }}
           />
         </div>
         <div className="transcript-progress-bar__info">
-          <span>{recordingDiagnostics.totalMB.toFixed(2)} / {maxMB} MB</span>
-          {hasTranscript && (
+          {hasProgress ? (
+            <span>{transcribedChunks} / {totalChunksToTranscribe} chunks ({Math.round(progressPct)}%)</span>
+          ) : (
+            <span>{status === 'Idle' ? t('transcriptEmpty') : t('liveTranscribing')}</span>
+          )}
+          {transcriptText && (
             <span className="transcript-progress-bar__hint">
               {transcriptText.length > 60 ? `…${transcriptText.slice(-60)}` : transcriptText}
             </span>

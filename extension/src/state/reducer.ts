@@ -33,6 +33,8 @@ export const initialState: AppState = {
     totalMB: 0,
     mbPerMin: 0,
     estMinTo25MB: null,
+    transcribedChunks: 0,
+    totalChunksToTranscribe: 0,
   },
   devices: [],
   selectedDeviceId: 'default',
