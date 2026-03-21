@@ -129,13 +129,14 @@ function App() {
 
         const fallbackStatus = latestSession ? mapSessionStatusToAudioStatus(latestSession.status) : 'Idle';
         const liveTranscript = snapshot?.transcript ?? '';
+        const isRecording = snapshot?.status && snapshot.status !== 'Idle' && snapshot.status !== 'Stopped' && snapshot.status !== 'Error';
 
         dispatch({
           type: 'SYNC_RECORDING_STATE',
           payload: {
             status: snapshot?.status ?? fallbackStatus,
             selectedDeviceId: snapshot?.selectedDeviceId ?? persistedDeviceId,
-            selectedSource: snapshot?.selectedSource ?? persistedAudioSource,
+            selectedSource: isRecording ? (snapshot?.selectedSource ?? persistedAudioSource) : persistedAudioSource,
             transcriptText: liveTranscript || latestSession?.transcript || '',
             ...(snapshot?.diagnostics ? { recordingDiagnostics: snapshot.diagnostics } : {}),
           },
@@ -252,6 +253,11 @@ function App() {
     dispatch({ type: 'SET_ERROR', payload: null });
 
     try {
+      if (selectedSource === 'mic' || selectedSource === 'mix') {
+        const permStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        permStream.getTracks().forEach((track) => track.stop());
+      }
+
       let streamId: string | undefined;
       if (selectedSource === 'tab' || selectedSource === 'mix') {
         streamId = await new Promise<string>((resolve, reject) => {
