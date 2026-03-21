@@ -116,10 +116,12 @@ function App() {
     const syncState = async () => {
       try {
         await ensureOffscreenDocument();
+        const settings = await loadSettings();
+        const defaultSource = normalizeAudioSource(settings.defaultSource);
         const [snapshot, persistedDeviceId, persistedAudioSource, latestSession] = await Promise.all([
           queryStateFromOffscreen(),
           readSelectedDeviceId(),
-          readSelectedAudioSource(selectedSource),
+          readSelectedAudioSource(defaultSource),
           getLatestSession(),
         ]);
 
@@ -191,28 +193,30 @@ function App() {
   useEffect(() => {
     const refreshDevices = async () => {
       try {
-        const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        permissionStream.getTracks().forEach((track) => track.stop());
-
         const mediaDevices = await navigator.mediaDevices.enumerateDevices();
         const microphoneDevices = mediaDevices.filter((device) => device.kind === 'audioinput');
-        dispatch({
-          type: 'SET_DEVICES',
-          payload: [
-            { id: 'default', label: 'System default microphone' },
-            ...microphoneDevices.map((device, index) => ({
-              id: device.deviceId,
-              label: device.label || `Microphone ${index + 1}`,
-            })),
-          ],
-        });
+        if (microphoneDevices.length > 0) {
+          dispatch({
+            type: 'SET_DEVICES',
+            payload: [
+              { id: 'default', label: 'System default microphone' },
+              ...microphoneDevices.map((device, index) => ({
+                id: device.deviceId,
+                label: device.label || `Microphone ${index + 1}`,
+              })),
+            ],
+          });
+        } else {
+          dispatch({
+            type: 'SET_DEVICES',
+            payload: [{ id: 'default', label: 'System default microphone' }],
+          });
+        }
       } catch (deviceError) {
         dispatch({
           type: 'SET_DEVICES',
           payload: [{ id: 'default', label: 'System default microphone' }],
         });
-        const message = deviceError instanceof Error ? deviceError.message : String(deviceError);
-        dispatch({ type: 'SET_ERROR', payload: `Unable to enumerate microphones: ${message}` });
       }
     };
 
