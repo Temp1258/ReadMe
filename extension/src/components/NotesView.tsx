@@ -24,7 +24,7 @@ type NotesViewProps = {
 
 function AiSummaryPanel({ summary, t }: { summary: SessionAiSummary; t: (key: TranslationKey) => string }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px', background: 'var(--surfaceAlt)', borderRadius: '8px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px', background: 'var(--surfaceAlt)', borderRadius: '8px', height: '200px', minHeight: '200px', maxHeight: '200px', overflowY: 'auto' }}>
       <h3 style={{ fontSize: '13px', margin: 0 }}>{t('aiSummary')}</h3>
       <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0, lineHeight: 1.5 }}>{summary.summary}</p>
 
