@@ -517,8 +517,6 @@ function App() {
         <SettingsView
           uiTheme={uiTheme}
           uiLang={uiLang}
-          sttStatusLine={sttStatusLine}
-          sttConfigured={sttConfigured}
           t={t}
           onThemeChange={(theme) => void handleThemeChange(theme)}
           onLanguageChange={(lang) => void handleLanguageChange(lang)}

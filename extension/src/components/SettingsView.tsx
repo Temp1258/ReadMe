@@ -6,32 +6,43 @@ import { loadSettings, saveSettings, type SttProvider } from '../settings';
 type SettingsViewProps = {
   uiTheme: UITheme;
   uiLang: UILang;
-  sttStatusLine: string;
-  sttConfigured: boolean;
   t: (key: TranslationKey) => string;
   onThemeChange: (theme: UITheme) => void;
   onLanguageChange: (lang: UILang) => void;
   onOpenSettings: () => void;
 };
 
+const providerLabelMap: Record<SttProvider, string> = {
+  openai: 'OpenAI Whisper',
+  deepgram: 'Deepgram Nova-2',
+  siliconflow: 'SiliconFlow',
+  mock: 'Mock',
+};
+
 export function SettingsView({
   uiTheme,
   uiLang,
-  sttStatusLine,
-  sttConfigured,
   t,
   onThemeChange,
   onLanguageChange,
   onOpenSettings,
 }: SettingsViewProps) {
   const [provider, setProvider] = useState<SttProvider>('mock');
-  const [deepgramApiKey, setDeepgramApiKey] = useState('');
+  const [providerConfigured, setProviderConfigured] = useState(false);
   const [summaryEnabled, setSummaryEnabled] = useState(false);
+
+  const checkProviderConfigured = (settings: { stt: { provider: SttProvider; apiKey?: string; deepgramApiKey?: string; siliconflowApiKey?: string } }) => {
+    const p = settings.stt.provider;
+    if (p === 'openai') return Boolean(settings.stt.apiKey?.trim());
+    if (p === 'deepgram') return Boolean(settings.stt.deepgramApiKey?.trim());
+    if (p === 'siliconflow') return Boolean(settings.stt.siliconflowApiKey?.trim());
+    return false;
+  };
 
   useEffect(() => {
     loadSettings().then((settings) => {
       setProvider(settings.stt.provider);
-      setDeepgramApiKey(settings.stt.deepgramApiKey ?? '');
+      setProviderConfigured(checkProviderConfigured(settings));
       setSummaryEnabled(settings.ai?.summaryEnabled ?? false);
     });
   }, []);
@@ -39,12 +50,9 @@ export function SettingsView({
   const handleProviderChange = async (newProvider: SttProvider) => {
     setProvider(newProvider);
     const settings = await loadSettings();
-    await saveSettings({ ...settings, stt: { ...settings.stt, provider: newProvider } });
-  };
-
-  const handleDeepgramKeyBlur = async () => {
-    const settings = await loadSettings();
-    await saveSettings({ ...settings, stt: { ...settings.stt, deepgramApiKey: deepgramApiKey.trim() } });
+    const updated = { ...settings, stt: { ...settings.stt, provider: newProvider } };
+    await saveSettings(updated);
+    setProviderConfigured(checkProviderConfigured(updated));
   };
 
   const handleSummaryToggle = async () => {
@@ -100,7 +108,7 @@ export function SettingsView({
 
       <div className="settings-card">
         <h2>{t('providerSection')}</h2>
-        <p className="panel__body">{t('providerStatus')}: {sttStatusLine} · {sttConfigured ? t('configured') : t('notConfigured')}</p>
+        <p className="panel__body">{t('providerStatus')}: {providerLabelMap[provider]} · {providerConfigured ? t('configured') : t('notConfigured')}</p>
         <div className="settings-toggle-row">
           <p className="panel__body">{t('source')}</p>
           <div className="inline-actions">
@@ -134,23 +142,6 @@ export function SettingsView({
             </button>
           </div>
         </div>
-
-        {provider === 'deepgram' && (
-          <div style={{ marginTop: '8px' }}>
-            <label className="form__label" htmlFor="deepgram-api-key">
-              {t('deepgramApiKey')}
-            </label>
-            <input
-              className="form__input"
-              id="deepgram-api-key"
-              type="password"
-              value={deepgramApiKey}
-              onChange={(e) => setDeepgramApiKey(e.target.value)}
-              onBlur={() => void handleDeepgramKeyBlur()}
-              placeholder="dg-..."
-            />
-          </div>
-        )}
 
         <button className="button button--tertiary settings-link" onClick={onOpenSettings} type="button">
           {t('manageApi')}
