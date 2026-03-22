@@ -68,41 +68,25 @@ export function SettingsView({
         <h2>{t('appearance')}</h2>
         <div className="settings-toggle-row">
           <p className="panel__body">{t('appearance')}</p>
-          <div className="inline-actions">
-            <button
-              className={`button button--secondary ${uiTheme === 'light' ? 'button--selected' : ''}`}
-              onClick={() => onThemeChange('light')}
-              type="button"
-            >
-              {t('appearanceLight')}
-            </button>
-            <button
-              className={`button button--secondary ${uiTheme === 'dark' ? 'button--selected' : ''}`}
-              onClick={() => onThemeChange('dark')}
-              type="button"
-            >
-              {t('appearanceDark')}
-            </button>
-          </div>
+          <select
+            className="form__input"
+            value={uiTheme}
+            onChange={(e) => onThemeChange(e.target.value as UITheme)}
+          >
+            <option value="light">{t('appearanceLight')}</option>
+            <option value="dark">{t('appearanceDark')}</option>
+          </select>
         </div>
         <div className="settings-toggle-row">
           <p className="panel__body">{t('language')}</p>
-          <div className="inline-actions">
-            <button
-              className={`button button--secondary ${uiLang === 'en' ? 'button--selected' : ''}`}
-              onClick={() => onLanguageChange('en')}
-              type="button"
-            >
-              {t('languageEnglish')}
-            </button>
-            <button
-              className={`button button--secondary ${uiLang === 'zh' ? 'button--selected' : ''}`}
-              onClick={() => onLanguageChange('zh')}
-              type="button"
-            >
-              {t('languageChinese')}
-            </button>
-          </div>
+          <select
+            className="form__input"
+            value={uiLang}
+            onChange={(e) => onLanguageChange(e.target.value as UILang)}
+          >
+            <option value="en">{t('languageEnglish')}</option>
+            <option value="zh">{t('languageChinese')}</option>
+          </select>
         </div>
       </div>
 
