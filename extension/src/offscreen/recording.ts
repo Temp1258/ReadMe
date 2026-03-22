@@ -5,11 +5,11 @@ import {
   updateRecordingSession,
   updateSessionState,
 } from '../db/indexeddb';
-import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings, resetLiveCumulativeAudioOffset } from './state';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings, resetLiveCumulativeAudioOffset } from './state';
 import type { AudioSource } from './state';
 import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
-import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue, retryFailedBatches } from './live-transcribe';
+import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue, retryFailedBatches, resetLiveTranscribeState } from './live-transcribe';
 
 export async function setRecordingSessionError(sessionId: string): Promise<void> {
   try {
@@ -262,15 +262,25 @@ export async function stopRecording(): Promise<void> {
 
   const recordingSession = state.recordingSession;
 
+  // Capture keys BEFORE any cleanup so retryFailedBatches can use them
+  const capturedKeys = {
+    apiKey: inMemoryApiKey,
+    deepgramKey: inMemoryDeepgramApiKey,
+    siliconflowKey: inMemorySiliconflowApiKey,
+    provider: activeProvider,
+  };
+
   let transcriptionFailed = false;
 
-  // Flush any remaining live transcription chunks
+  // Flush any remaining live transcription chunks.
+  // This now awaits any in-flight processLiveTranscribeQueue before draining,
+  // which fixes the race condition where the last batch was lost.
   await flushLiveTranscribeQueue();
 
   // Retry any batches that failed during live transcription
   if (state.liveFailedBatches.length > 0) {
     updateStatus('Transcribing', `Recovering ${state.liveFailedBatches.length} failed segment(s)...`);
-    await retryFailedBatches();
+    await retryFailedBatches(capturedKeys);
   }
 
   const hasLiveTranscript = state.transcript.trim().length > 0;
@@ -352,6 +362,7 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
   state.webmHeader = null;
   state.webmHeaderExtracted = false;
   resetLiveCumulativeAudioOffset();
+  resetLiveTranscribeState();
 
   broadcast({
     type: 'TRANSCRIPT_UPDATE',
