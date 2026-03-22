@@ -35,7 +35,7 @@ function App() {
   const {
     error, activeView, status, recordingDiagnostics,
     devices, selectedDeviceId, selectedSource,
-    sttStatusLine, sttConfigured, notesSessions, selectedSessionId,
+    notesSessions, selectedSessionId,
     notesLoading, notesError, notesSearch, exportToast,
     summaryLoading, uiTheme, uiLang,
   } = state;
@@ -475,8 +475,6 @@ function App() {
         <TranscriptionView
           status={status}
           recordingDiagnostics={recordingDiagnostics}
-          sttStatusLine={sttStatusLine}
-          sttConfigured={sttConfigured}
           isRecordingActive={isRecordingActive}
           isAudioSourceLocked={isAudioSourceLocked}
           isMicrophoneLocked={isMicrophoneLocked}
