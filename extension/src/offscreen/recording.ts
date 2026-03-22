@@ -241,6 +241,12 @@ export async function stopRecording(): Promise<void> {
       );
     });
 
+    // Clear the original handler BEFORE requestData so only the once-listener
+    // above handles the event.  Without this, both the original ondataavailable
+    // handler AND the once-listener fire, causing the same blob to be persisted
+    // (and enqueued for live transcription) twice.
+    recorder.ondataavailable = null;
+
     recorder.requestData();
     const finalChunk = await stopDataPromise;
     if (finalChunk && finalChunk.size > 0) {
