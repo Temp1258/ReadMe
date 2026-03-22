@@ -192,8 +192,8 @@ export async function getSttDiagnosticsFromRuntime(): Promise<{ providerLabel: s
       return { providerLabel: 'Unknown', configurationLabel: 'Not configured', error: response.error || 'Unable to read STT settings.' };
     }
 
-    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : response.provider === 'deepgram' ? 'Deepgram Nova-2' : 'Mock';
-    const configurationLabel = (response.provider === 'openai' || response.provider === 'deepgram') && response.keyPresent ? 'Configured' : 'Not configured';
+    const providerLabel = response.provider === 'openai' ? 'OpenAI Whisper' : response.provider === 'deepgram' ? 'Deepgram Nova-2' : response.provider === 'siliconflow' ? 'SiliconFlow' : 'Mock';
+    const configurationLabel = (response.provider === 'openai' || response.provider === 'deepgram' || response.provider === 'siliconflow') && response.keyPresent ? 'Configured' : 'Not configured';
 
     return { providerLabel, configurationLabel };
   } catch (error) {
