@@ -253,6 +253,31 @@ function App() {
     dispatch({ type: 'SET_ERROR', payload: null });
 
     try {
+      // Chrome extensions cannot trigger the microphone permission prompt from
+      // popup or offscreen contexts.  Check the current permission state and, if
+      // not yet granted, open a dedicated tab that can show the native prompt.
+      if (selectedSource === 'mic' || selectedSource === 'mix') {
+        const permStatus = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        if (permStatus.state !== 'granted') {
+          const permPageUrl = chrome.runtime.getURL('src/mic-permission.html');
+          // Wait for the permission result before continuing.
+          await new Promise<void>((resolve, reject) => {
+            const onMessage = (msg: { type?: string; granted?: boolean }) => {
+              if (msg?.type === 'MIC_PERMISSION_RESULT') {
+                chrome.runtime.onMessage.removeListener(onMessage);
+                if (msg.granted) {
+                  resolve();
+                } else {
+                  reject(new Error('Microphone permission was denied. Please allow microphone access and try again.'));
+                }
+              }
+            };
+            chrome.runtime.onMessage.addListener(onMessage);
+            chrome.tabs.create({ url: permPageUrl });
+          });
+        }
+      }
+
       let streamId: string | undefined;
       if (selectedSource === 'tab' || selectedSource === 'mix') {
         streamId = await new Promise<string>((resolve, reject) => {
