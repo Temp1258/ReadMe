@@ -1,12 +1,19 @@
+import { useEffect, useState } from 'react';
 import type { AudioStatus, AudioSource, RecordingDiagnostics, DeviceOption } from '../types';
 import type { TranslationKey } from '../i18n';
+import { loadSettings, type SttProvider } from '../settings';
 import { normalizeAudioSource } from '../utils/format';
+
+const providerLabelMap: Record<SttProvider, string> = {
+  openai: 'OpenAI Whisper',
+  deepgram: 'Deepgram Nova-2',
+  siliconflow: 'SiliconFlow',
+  mock: 'Mock',
+};
 
 type TranscriptionViewProps = {
   status: AudioStatus;
   recordingDiagnostics: RecordingDiagnostics;
-  sttStatusLine: string;
-  sttConfigured: boolean;
   isRecordingActive: boolean;
   isAudioSourceLocked: boolean;
   isMicrophoneLocked: boolean;
@@ -25,8 +32,6 @@ type TranscriptionViewProps = {
 export function TranscriptionView({
   status,
   recordingDiagnostics,
-  sttStatusLine,
-  sttConfigured,
   isRecordingActive,
   isAudioSourceLocked,
   isMicrophoneLocked,
@@ -41,6 +46,20 @@ export function TranscriptionView({
   onDeviceChange,
   onLearnMoreClick,
 }: TranscriptionViewProps) {
+  const [providerLabel, setProviderLabel] = useState('Mock');
+  const [providerConfigured, setProviderConfigured] = useState(false);
+
+  useEffect(() => {
+    loadSettings().then((settings) => {
+      const p = settings.stt.provider;
+      setProviderLabel(providerLabelMap[p]);
+      if (p === 'openai') setProviderConfigured(Boolean(settings.stt.apiKey?.trim()));
+      else if (p === 'deepgram') setProviderConfigured(Boolean(settings.stt.deepgramApiKey?.trim()));
+      else if (p === 'siliconflow') setProviderConfigured(Boolean(settings.stt.siliconflowApiKey?.trim()));
+      else setProviderConfigured(false);
+    });
+  }, []);
+
   const { transcribedChunks, totalChunksToTranscribe } = recordingDiagnostics;
   const isTranscribing = status === 'Listening' || status === 'Transcribing';
   const hasProgress = totalChunksToTranscribe > 0;
@@ -57,7 +76,7 @@ export function TranscriptionView({
             <p className="status-pill__label">{t('status')}</p>
             <p className="status-pill__value">{status}</p>
           </div>
-          <p className="status-card__provider">{sttStatusLine} · {sttConfigured ? t('configured') : t('notConfigured')}</p>
+          <p className="status-card__provider">{providerLabel} · {providerConfigured ? t('configured') : t('notConfigured')}</p>
         </div>
         <div className="status-metrics" role="list" aria-label={t('status')}>
           <p className="status-metrics__item" role="listitem">
