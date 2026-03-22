@@ -599,9 +599,11 @@ h3 {
 }
 
 .notes-detail__transcript {
-  flex: 0 1 auto;
-  height: auto;
-  max-height: 320px;
+  flex: 0 0 auto;
+  height: 200px;
+  min-height: 200px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .notes-detail__tab-bar {

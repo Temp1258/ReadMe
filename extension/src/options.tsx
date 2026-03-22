@@ -136,7 +136,6 @@ function OptionsPage() {
 
   const openaiKeySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
   const deepgramKeySummary = storedDeepgramKey ? `Configured (${maskSecret(storedDeepgramKey)})` : 'Not configured';
-  const siliconflowKeySummary = storedSiliconflowKey ? `Configured (${maskSecret(storedSiliconflowKey)})` : 'Not configured';
 
   return (
     <main className="popup options-page">
@@ -199,27 +198,6 @@ function OptionsPage() {
                 placeholder="dg-..."
                 type="password"
                 value={deepgramKeyInput}
-              />
-            </>
-          )}
-
-          {selectedProvider === 'siliconflow' && (
-            <>
-              <label className="form__label" htmlFor="siliconflow-api-key-status">
-                SiliconFlow API Key status
-              </label>
-              <input className="form__input" id="siliconflow-api-key-status" readOnly type="text" value={siliconflowKeySummary} />
-
-              <label className="form__label" htmlFor="siliconflow-api-key">
-                New SiliconFlow API Key (optional)
-              </label>
-              <input
-                className="form__input"
-                id="siliconflow-api-key"
-                onChange={(event) => setSiliconflowKeyInput(event.target.value)}
-                placeholder="sk-..."
-                type="password"
-                value={siliconflowKeyInput}
               />
             </>
           )}
