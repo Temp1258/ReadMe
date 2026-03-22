@@ -84,7 +84,7 @@ function normalizeSettings(settings: Partial<ExtensionSettings> | null | undefin
           : { provider: 'mock', ...optionalKeys };
 
   const ai: AiFeatureSettings = {
-    summaryEnabled: settings?.ai?.summaryEnabled ?? true,
+    summaryEnabled: settings?.ai?.summaryEnabled ?? false,
   };
 
   return { defaultSource, stt, ai };
