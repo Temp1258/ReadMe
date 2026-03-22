@@ -253,11 +253,6 @@ function App() {
     dispatch({ type: 'SET_ERROR', payload: null });
 
     try {
-      if (selectedSource === 'mic' || selectedSource === 'mix') {
-        const permStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        permStream.getTracks().forEach((track) => track.stop());
-      }
-
       let streamId: string | undefined;
       if (selectedSource === 'tab' || selectedSource === 'mix') {
         streamId = await new Promise<string>((resolve, reject) => {
