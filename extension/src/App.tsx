@@ -393,13 +393,30 @@ function App() {
     dispatch({ type: 'SET_SUMMARY_LOADING', payload: true });
     try {
       const settings = await loadSettings();
-      const apiKey = settings.stt.apiKey?.trim();
-      if (!apiKey) {
-        dispatch({ type: 'SET_NOTES_ERROR', payload: t('summaryError') });
-        return;
+      const provider = settings.stt.provider;
+
+      let llmSettings: { apiKey: string; endpoint?: string; model?: string };
+      if (provider === 'siliconflow') {
+        const apiKey = settings.stt.siliconflowApiKey?.trim();
+        if (!apiKey) {
+          dispatch({ type: 'SET_NOTES_ERROR', payload: t('summaryError') });
+          return;
+        }
+        llmSettings = {
+          apiKey,
+          endpoint: 'https://api.siliconflow.cn/v1/chat/completions',
+          model: 'Qwen/Qwen2.5-7B-Instruct',
+        };
+      } else {
+        const apiKey = settings.stt.apiKey?.trim();
+        if (!apiKey) {
+          dispatch({ type: 'SET_NOTES_ERROR', payload: t('summaryError') });
+          return;
+        }
+        llmSettings = { apiKey };
       }
 
-      const result = await generateSummary(session.transcript, { apiKey }, uiLang);
+      const result = await generateSummary(session.transcript, llmSettings, uiLang);
       const aiSummary = { ...result, generatedAt: Date.now() };
       await updateSessionAiSummary(sessionId, aiSummary);
       dispatch({ type: 'UPDATE_SESSION', payload: { id: sessionId, updates: { aiSummary } } });
