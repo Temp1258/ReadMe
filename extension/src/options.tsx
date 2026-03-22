@@ -32,9 +32,11 @@ function parseDefaultSourceInput(source: string): DefaultSource {
 function OptionsPage() {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [deepgramKeyInput, setDeepgramKeyInput] = useState('');
+  const [siliconflowKeyInput, setSiliconflowKeyInput] = useState('');
   const [selectedProvider, setSelectedProvider] = useState<SttProvider>('mock');
   const [storedApiKey, setStoredApiKey] = useState('');
   const [storedDeepgramKey, setStoredDeepgramKey] = useState('');
+  const [storedSiliconflowKey, setStoredSiliconflowKey] = useState('');
   const [defaultSource, setDefaultSource] = useState<DefaultSource>(defaults.defaultSource);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +52,7 @@ function OptionsPage() {
     Promise.all([loadSettings(), loadSttSettings(), getSttCredentialSummary()]).then(([settings, stt, summary]) => {
       setStoredApiKey(stt.apiKey?.trim() ?? '');
       setStoredDeepgramKey(settings.stt.deepgramApiKey?.trim() ?? '');
+      setStoredSiliconflowKey(settings.stt.siliconflowApiKey?.trim() ?? '');
       setSelectedProvider(settings.stt.provider);
       setDefaultSource(settings.defaultSource ?? defaults.defaultSource);
       setSttDiagnostics(summary);
@@ -63,6 +66,7 @@ function OptionsPage() {
 
     const trimmedKey = apiKeyInput.trim();
     const trimmedDeepgramKey = deepgramKeyInput.trim();
+    const trimmedSiliconflowKey = siliconflowKeyInput.trim();
 
     if (apiKeyInput.length > 0 && trimmedKey.length === 0) {
       setError('Whisper API key cannot be only whitespace.');
@@ -79,6 +83,7 @@ function OptionsPage() {
         provider: selectedProvider,
         ...(trimmedKey ? { apiKey: trimmedKey } : {}),
         ...(trimmedDeepgramKey ? { deepgramApiKey: trimmedDeepgramKey } : {}),
+        ...(trimmedSiliconflowKey ? { siliconflowApiKey: trimmedSiliconflowKey } : {}),
       };
 
       await saveSettings({
@@ -91,8 +96,10 @@ function OptionsPage() {
       setStoredApiKey(updatedStt.apiKey?.trim() ?? '');
       const updatedSettings = await loadSettings();
       setStoredDeepgramKey(updatedSettings.stt.deepgramApiKey?.trim() ?? '');
+      setStoredSiliconflowKey(updatedSettings.stt.siliconflowApiKey?.trim() ?? '');
       setApiKeyInput('');
       setDeepgramKeyInput('');
+      setSiliconflowKeyInput('');
       await refreshSttDiagnostics();
       setStatusMessage('Settings saved.');
     } catch (saveError) {
@@ -113,8 +120,10 @@ function OptionsPage() {
       await saveSettings({ ...currentSettings, defaultSource });
       setStoredApiKey('');
       setStoredDeepgramKey('');
+      setStoredSiliconflowKey('');
       setApiKeyInput('');
       setDeepgramKeyInput('');
+      setSiliconflowKeyInput('');
       setSelectedProvider('mock');
       await refreshSttDiagnostics();
       setStatusMessage('API keys cleared.');
@@ -127,6 +136,7 @@ function OptionsPage() {
 
   const openaiKeySummary = storedApiKey ? `Configured (${maskSecret(storedApiKey)})` : 'Not configured';
   const deepgramKeySummary = storedDeepgramKey ? `Configured (${maskSecret(storedDeepgramKey)})` : 'Not configured';
+  const siliconflowKeySummary = storedSiliconflowKey ? `Configured (${maskSecret(storedSiliconflowKey)})` : 'Not configured';
 
   return (
     <main className="popup options-page">
@@ -147,6 +157,7 @@ function OptionsPage() {
           >
             <option value="openai">OpenAI Whisper</option>
             <option value="deepgram">Deepgram Nova-2</option>
+            <option value="siliconflow">SiliconFlow</option>
             <option value="mock">Mock (offline testing)</option>
           </select>
 
@@ -192,6 +203,27 @@ function OptionsPage() {
             </>
           )}
 
+          {selectedProvider === 'siliconflow' && (
+            <>
+              <label className="form__label" htmlFor="siliconflow-api-key-status">
+                SiliconFlow API Key status
+              </label>
+              <input className="form__input" id="siliconflow-api-key-status" readOnly type="text" value={siliconflowKeySummary} />
+
+              <label className="form__label" htmlFor="siliconflow-api-key">
+                New SiliconFlow API Key (optional)
+              </label>
+              <input
+                className="form__input"
+                id="siliconflow-api-key"
+                onChange={(event) => setSiliconflowKeyInput(event.target.value)}
+                placeholder="sk-..."
+                type="password"
+                value={siliconflowKeyInput}
+              />
+            </>
+          )}
+
           <label className="form__label" htmlFor="default-source">
             Default audio source
           </label>
@@ -212,7 +244,7 @@ function OptionsPage() {
           <button className="button" disabled={isSaving} type="submit">
             {isSaving ? 'Saving...' : 'Save'}
           </button>
-          <button className="button button--secondary" disabled={isSaving || (!storedApiKey && !storedDeepgramKey)} onClick={handleClearApiKey} type="button">
+          <button className="button button--secondary" disabled={isSaving || (!storedApiKey && !storedDeepgramKey && !storedSiliconflowKey)} onClick={handleClearApiKey} type="button">
             Clear API keys
           </button>
 

@@ -34,10 +34,11 @@ export type RuntimeEventMessage =
 export type GetSttSettingsResponse =
   | {
       ok: true;
-      provider: 'openai' | 'mock' | 'deepgram';
+      provider: 'openai' | 'mock' | 'deepgram' | 'siliconflow';
       keyPresent: boolean;
       apiKey?: string;
       deepgramApiKey?: string;
+      siliconflowApiKey?: string;
     }
   | { ok: false; error: string };
 
@@ -70,7 +71,8 @@ export const state = {
 
 export let inMemoryApiKey: string | null = null;
 export let inMemoryDeepgramApiKey: string | null = null;
-export let activeProvider: 'openai' | 'mock' | 'deepgram' = 'mock';
+export let inMemorySiliconflowApiKey: string | null = null;
+export let activeProvider: 'openai' | 'mock' | 'deepgram' | 'siliconflow' = 'mock';
 
 export function setInMemoryApiKey(key: string | null): void {
   inMemoryApiKey = key;
@@ -80,7 +82,11 @@ export function setInMemoryDeepgramApiKey(key: string | null): void {
   inMemoryDeepgramApiKey = key;
 }
 
-export function setActiveProvider(provider: 'openai' | 'mock' | 'deepgram'): void {
+export function setInMemorySiliconflowApiKey(key: string | null): void {
+  inMemorySiliconflowApiKey = key;
+}
+
+export function setActiveProvider(provider: 'openai' | 'mock' | 'deepgram' | 'siliconflow'): void {
   activeProvider = provider;
 }
 
@@ -177,6 +183,7 @@ export async function refreshSttRuntimeSettings(): Promise<void> {
     const message = response?.error ?? 'Unable to fetch STT settings';
     setInMemoryApiKey(null);
     setInMemoryDeepgramApiKey(null);
+    setInMemorySiliconflowApiKey(null);
     setActiveProvider('mock');
     state.useMockTranscription = true;
     console.info(`STT: settings unavailable error=${message}`);
@@ -186,22 +193,33 @@ export async function refreshSttRuntimeSettings(): Promise<void> {
   const providerId = response.provider;
   const apiKey = response.apiKey ?? '';
   const deepgramApiKey = response.deepgramApiKey ?? '';
+  const siliconflowApiKey = response.siliconflowApiKey ?? '';
   const keyPresent = apiKey.trim().length > 0;
   const deepgramKeyPresent = deepgramApiKey.trim().length > 0;
+  const siliconflowKeyPresent = siliconflowApiKey.trim().length > 0;
 
   if (providerId === 'openai' && keyPresent) {
     setInMemoryApiKey(apiKey);
     setInMemoryDeepgramApiKey(null);
+    setInMemorySiliconflowApiKey(null);
     setActiveProvider('openai');
     state.useMockTranscription = false;
   } else if (providerId === 'deepgram' && deepgramKeyPresent) {
     setInMemoryApiKey(null);
     setInMemoryDeepgramApiKey(deepgramApiKey);
+    setInMemorySiliconflowApiKey(null);
     setActiveProvider('deepgram');
+    state.useMockTranscription = false;
+  } else if (providerId === 'siliconflow' && siliconflowKeyPresent) {
+    setInMemoryApiKey(null);
+    setInMemoryDeepgramApiKey(null);
+    setInMemorySiliconflowApiKey(siliconflowApiKey);
+    setActiveProvider('siliconflow');
     state.useMockTranscription = false;
   } else {
     setInMemoryApiKey(null);
     setInMemoryDeepgramApiKey(null);
+    setInMemorySiliconflowApiKey(null);
     setActiveProvider('mock');
     state.useMockTranscription = true;
   }

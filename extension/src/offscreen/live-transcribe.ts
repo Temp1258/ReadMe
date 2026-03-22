@@ -1,4 +1,4 @@
-import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, broadcast, updateStatus } from './state';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, broadcast, updateStatus } from './state';
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
@@ -90,7 +90,8 @@ async function transcribeBatch(
 ): Promise<void> {
   const apiKey = inMemoryApiKey;
   const deepgramKey = inMemoryDeepgramApiKey;
-  if (!apiKey && !deepgramKey) return;
+  const siliconflowKey = inMemorySiliconflowApiKey;
+  if (!apiKey && !deepgramKey && !siliconflowKey) return;
 
   const mergedBlob = buildTranscribableBlob(chunks);
   if (mergedBlob.size < CHUNK_MIN_BYTES) return;
@@ -104,6 +105,14 @@ async function transcribeBatch(
     let text: string;
     if (activeProvider === 'deepgram' && deepgramKey) {
       text = await transcribeWithDeepgram(mergedBlob, { apiKey: deepgramKey });
+    } else if (activeProvider === 'siliconflow' && siliconflowKey) {
+      text = await transcribeAudioBlob(mergedBlob, {
+        apiKey: siliconflowKey,
+        model: 'FunAudioLLM/SenseVoiceSmall',
+        endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+        fileName: `live-${startSeq}-${endSeq}.webm`,
+        maxRetries: 2,
+      });
     } else if (apiKey) {
       text = await transcribeAudioBlob(mergedBlob, {
         apiKey,

@@ -1,7 +1,7 @@
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob, WhisperApiError } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
-import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, updateStatus, broadcast } from './state';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, updateStatus, broadcast } from './state';
 import {
   CHUNK_MIN_BYTES,
   TRANSCRIBE_MAX_RETRIES,
@@ -96,6 +96,36 @@ export async function transcribeSegmentBlob(
     for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
       try {
         const text = await transcribeWithDeepgram(segmentBlob, { apiKey: deepgramKey });
+        await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`, timing);
+        return;
+      } catch (error) {
+        if (attempt >= TRANSCRIBE_MAX_RETRIES) {
+          throw new Error(`Segment ${segmentIndex} failed after ${TRANSCRIBE_MAX_RETRIES} attempts.`);
+        }
+        const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+    return;
+  }
+
+  if (activeProvider === 'siliconflow') {
+    const siliconflowKey = inMemorySiliconflowApiKey;
+    if (!siliconflowKey) {
+      throw new Error('Missing SiliconFlow API key for transcription.');
+    }
+
+    const sfFilename = getChunkFilename(segmentIndex, segmentBlob.type || '');
+
+    for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
+      try {
+        const text = await transcribeAudioBlob(segmentBlob, {
+          apiKey: siliconflowKey,
+          model: 'FunAudioLLM/SenseVoiceSmall',
+          endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+          fileName: sfFilename,
+          maxRetries: 1,
+        });
         await appendTranscript(segmentIndex, text || `[empty] segment ${segmentIndex}`, timing);
         return;
       } catch (error) {

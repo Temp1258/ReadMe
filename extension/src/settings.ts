@@ -1,5 +1,5 @@
 export type DefaultSource = 'microphone' | 'tab' | 'mix';
-export type SttProvider = 'mock' | 'openai' | 'deepgram';
+export type SttProvider = 'mock' | 'openai' | 'deepgram' | 'siliconflow';
 type StorageAreaName = 'local' | 'localStorage';
 export type StorageBackendName = 'chrome.storage.local' | 'localStorage';
 export type SttDetectedFrom = 'settings.stt.apiKey' | 'none';
@@ -8,6 +8,7 @@ export type SttSettings = {
   provider: SttProvider;
   apiKey?: string;
   deepgramApiKey?: string;
+  siliconflowApiKey?: string;
 };
 
 type SttSettingsLoadResult = SttSettings & {
@@ -39,6 +40,7 @@ export const SETTINGS_STORAGE_KEY = 'settings';
 function resolveSttProvider(provider: unknown): SttProvider {
   if (provider === 'openai') return 'openai';
   if (provider === 'deepgram') return 'deepgram';
+  if (provider === 'siliconflow') return 'siliconflow';
   return 'mock';
 }
 
@@ -52,6 +54,7 @@ function normalizeSettings(settings: Partial<ExtensionSettings> | null | undefin
 
   const apiKey = trimApiKey(settings?.stt?.apiKey);
   const deepgramApiKey = trimApiKey(settings?.stt?.deepgramApiKey);
+  const siliconflowApiKey = trimApiKey(settings?.stt?.siliconflowApiKey);
   const requestedProvider = resolveSttProvider(settings?.stt?.provider);
 
   let provider: SttProvider;
@@ -59,16 +62,26 @@ function normalizeSettings(settings: Partial<ExtensionSettings> | null | undefin
     provider = 'openai';
   } else if (requestedProvider === 'deepgram' && deepgramApiKey) {
     provider = 'deepgram';
+  } else if (requestedProvider === 'siliconflow' && siliconflowApiKey) {
+    provider = 'siliconflow';
   } else {
     provider = 'mock';
   }
 
+  const optionalKeys = {
+    ...(apiKey ? { apiKey } : {}),
+    ...(deepgramApiKey ? { deepgramApiKey } : {}),
+    ...(siliconflowApiKey ? { siliconflowApiKey } : {}),
+  };
+
   const stt: SttSettings =
     provider === 'openai'
-      ? { provider, apiKey, deepgramApiKey: deepgramApiKey || undefined }
+      ? { provider, apiKey, ...optionalKeys }
       : provider === 'deepgram'
-        ? { provider, apiKey: apiKey || undefined, deepgramApiKey }
-        : { provider: 'mock', apiKey: apiKey || undefined, deepgramApiKey: deepgramApiKey || undefined };
+        ? { provider, deepgramApiKey, ...optionalKeys }
+        : provider === 'siliconflow'
+          ? { provider, siliconflowApiKey, ...optionalKeys }
+          : { provider: 'mock', ...optionalKeys };
 
   const ai: AiFeatureSettings = {
     summaryEnabled: settings?.ai?.summaryEnabled ?? true,
@@ -188,10 +201,11 @@ export async function loadSttSettings(): Promise<SttSettingsLoadResult> {
 function buildSttLoadResult(settings: ExtensionSettings): SttSettingsLoadResult {
   const apiKey = trimApiKey(settings.stt.apiKey);
   const deepgramApiKey = trimApiKey(settings.stt.deepgramApiKey);
+  const siliconflowApiKey = trimApiKey(settings.stt.siliconflowApiKey);
   const provider = settings.stt.provider;
 
   const detectedFrom: SttDetectedFrom =
-    (provider === 'openai' && apiKey) || (provider === 'deepgram' && deepgramApiKey)
+    (provider === 'openai' && apiKey) || (provider === 'deepgram' && deepgramApiKey) || (provider === 'siliconflow' && siliconflowApiKey)
       ? 'settings.stt.apiKey'
       : 'none';
 
@@ -199,21 +213,24 @@ function buildSttLoadResult(settings: ExtensionSettings): SttSettingsLoadResult 
     provider,
     ...(provider === 'openai' && apiKey ? { apiKey } : {}),
     ...(provider === 'deepgram' && deepgramApiKey ? { deepgramApiKey } : {}),
+    ...(provider === 'siliconflow' && siliconflowApiKey ? { siliconflowApiKey } : {}),
     detectedFrom,
     storageArea: 'local',
     backend: 'chrome.storage.local',
   };
 }
 
-export async function saveSttSettings(stt: { apiKey?: string; deepgramApiKey?: string; provider?: SttProvider }): Promise<void> {
+export async function saveSttSettings(stt: { apiKey?: string; deepgramApiKey?: string; siliconflowApiKey?: string; provider?: SttProvider }): Promise<void> {
   const settings = await loadSettings();
   const nextApiKey = trimApiKey(stt.apiKey);
   const nextDeepgramApiKey = trimApiKey(stt.deepgramApiKey);
+  const nextSiliconflowApiKey = trimApiKey(stt.siliconflowApiKey);
 
   const nextStt: SttSettings = {
     provider: stt.provider ?? settings.stt.provider,
     ...(nextApiKey ? { apiKey: nextApiKey } : {}),
     ...(nextDeepgramApiKey ? { deepgramApiKey: nextDeepgramApiKey } : {}),
+    ...(nextSiliconflowApiKey ? { siliconflowApiKey: nextSiliconflowApiKey } : {}),
   };
 
   await saveSettings({
@@ -226,12 +243,14 @@ export async function getSttCredentialSummary(): Promise<SttCredentialSummary> {
   const stt = await loadSttSettings();
   const apiKey = trimApiKey(stt.apiKey);
   const deepgramApiKey = trimApiKey(stt.deepgramApiKey);
+  const siliconflowApiKey = trimApiKey(stt.siliconflowApiKey);
 
   const configured =
     (stt.provider === 'openai' && Boolean(apiKey)) ||
-    (stt.provider === 'deepgram' && Boolean(deepgramApiKey));
+    (stt.provider === 'deepgram' && Boolean(deepgramApiKey)) ||
+    (stt.provider === 'siliconflow' && Boolean(siliconflowApiKey));
 
-  const activeKey = stt.provider === 'deepgram' ? deepgramApiKey : apiKey;
+  const activeKey = stt.provider === 'deepgram' ? deepgramApiKey : stt.provider === 'siliconflow' ? siliconflowApiKey : apiKey;
 
   return {
     configured,

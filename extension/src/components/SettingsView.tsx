@@ -24,12 +24,14 @@ export function SettingsView({
 }: SettingsViewProps) {
   const [provider, setProvider] = useState<SttProvider>('mock');
   const [deepgramApiKey, setDeepgramApiKey] = useState('');
+  const [siliconflowApiKey, setSiliconflowApiKey] = useState('');
   const [summaryEnabled, setSummaryEnabled] = useState(true);
 
   useEffect(() => {
     loadSettings().then((settings) => {
       setProvider(settings.stt.provider);
       setDeepgramApiKey(settings.stt.deepgramApiKey ?? '');
+      setSiliconflowApiKey(settings.stt.siliconflowApiKey ?? '');
       setSummaryEnabled(settings.ai?.summaryEnabled ?? true);
     });
   }, []);
@@ -43,6 +45,11 @@ export function SettingsView({
   const handleDeepgramKeyBlur = async () => {
     const settings = await loadSettings();
     await saveSettings({ ...settings, stt: { ...settings.stt, deepgramApiKey: deepgramApiKey.trim() } });
+  };
+
+  const handleSiliconflowKeyBlur = async () => {
+    const settings = await loadSettings();
+    await saveSettings({ ...settings, stt: { ...settings.stt, siliconflowApiKey: siliconflowApiKey.trim() } });
   };
 
   const handleSummaryToggle = async () => {
@@ -117,6 +124,13 @@ export function SettingsView({
               {t('providerDeepgram')}
             </button>
             <button
+              className={`button button--secondary ${provider === 'siliconflow' ? 'button--selected' : ''}`}
+              onClick={() => void handleProviderChange('siliconflow')}
+              type="button"
+            >
+              {t('providerSiliconflow')}
+            </button>
+            <button
               className={`button button--secondary ${provider === 'mock' ? 'button--selected' : ''}`}
               onClick={() => void handleProviderChange('mock')}
               type="button"
@@ -139,6 +153,23 @@ export function SettingsView({
               onChange={(e) => setDeepgramApiKey(e.target.value)}
               onBlur={() => void handleDeepgramKeyBlur()}
               placeholder="dg-..."
+            />
+          </div>
+        )}
+
+        {provider === 'siliconflow' && (
+          <div style={{ marginTop: '8px' }}>
+            <label className="form__label" htmlFor="siliconflow-api-key">
+              {t('siliconflowApiKey')}
+            </label>
+            <input
+              className="form__input"
+              id="siliconflow-api-key"
+              type="password"
+              value={siliconflowApiKey}
+              onChange={(e) => setSiliconflowApiKey(e.target.value)}
+              onBlur={() => void handleSiliconflowKeyBlur()}
+              placeholder="sk-..."
             />
           </div>
         )}
