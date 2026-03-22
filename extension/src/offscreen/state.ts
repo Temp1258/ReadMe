@@ -73,6 +73,7 @@ export let inMemoryApiKey: string | null = null;
 export let inMemoryDeepgramApiKey: string | null = null;
 export let inMemorySiliconflowApiKey: string | null = null;
 export let activeProvider: 'openai' | 'mock' | 'deepgram' | 'siliconflow' = 'mock';
+export let liveCumulativeAudioOffsetMs = 0;
 
 export function setInMemoryApiKey(key: string | null): void {
   inMemoryApiKey = key;
@@ -88,6 +89,14 @@ export function setInMemorySiliconflowApiKey(key: string | null): void {
 
 export function setActiveProvider(provider: 'openai' | 'mock' | 'deepgram' | 'siliconflow'): void {
   activeProvider = provider;
+}
+
+export function resetLiveCumulativeAudioOffset(): void {
+  liveCumulativeAudioOffsetMs = 0;
+}
+
+export function advanceLiveCumulativeAudioOffset(durationMs: number): void {
+  liveCumulativeAudioOffsetMs += durationMs;
 }
 
 export function toPersistedStatus(status: AudioStatus): PersistedStatus {
