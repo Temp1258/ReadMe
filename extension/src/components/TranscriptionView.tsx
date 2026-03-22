@@ -6,13 +6,13 @@ type TranscriptionViewProps = {
   status: AudioStatus;
   recordingDiagnostics: RecordingDiagnostics;
   sttStatusLine: string;
+  sttConfigured: boolean;
   isRecordingActive: boolean;
   isAudioSourceLocked: boolean;
   isMicrophoneLocked: boolean;
   selectedSource: AudioSource;
   selectedDeviceId: string;
   devices: DeviceOption[];
-  transcriptText: string;
   error: string | null;
   t: (key: TranslationKey) => string;
   onStartListening: () => void;
@@ -26,6 +26,7 @@ export function TranscriptionView({
   status,
   recordingDiagnostics,
   sttStatusLine,
+  sttConfigured,
   isRecordingActive,
   isAudioSourceLocked,
   isMicrophoneLocked,
@@ -56,23 +57,23 @@ export function TranscriptionView({
             <p className="status-pill__label">{t('status')}</p>
             <p className="status-pill__value">{status}</p>
           </div>
-          <p className="status-card__provider">{sttStatusLine}</p>
+          <p className="status-card__provider">{sttStatusLine} · {sttConfigured ? t('configured') : t('notConfigured')}</p>
         </div>
-        <div className="status-metrics" role="list" aria-label="Recording diagnostics">
+        <div className="status-metrics" role="list" aria-label={t('status')}>
           <p className="status-metrics__item" role="listitem">
-            <span className="status-metrics__label">Duration</span>
+            <span className="status-metrics__label">{t('metricDuration')}</span>
             <span className="status-metrics__value">{recordingDiagnostics.durationLabel}</span>
           </p>
           <p className="status-metrics__item" role="listitem">
-            <span className="status-metrics__label">Size</span>
+            <span className="status-metrics__label">{t('metricSize')}</span>
             <span className="status-metrics__value">{recordingDiagnostics.totalMB.toFixed(2)} MB</span>
           </p>
           <p className="status-metrics__item" role="listitem">
-            <span className="status-metrics__label">Rate</span>
+            <span className="status-metrics__label">{t('metricRate')}</span>
             <span className="status-metrics__value">{recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</span>
           </p>
           <p className="status-metrics__item" role="listitem">
-            <span className="status-metrics__label">Chunks</span>
+            <span className="status-metrics__label">{t('metricChunks')}</span>
             <span className="status-metrics__value">
               {transcribedChunks} / {totalChunksToTranscribe}
             </span>
@@ -159,13 +160,6 @@ export function TranscriptionView({
             className={`transcript-progress-bar__fill ${isTranscribing && hasProgress ? 'transcript-progress-bar__fill--active' : ''}`}
             style={{ width: `${progressPct}%` }}
           />
-        </div>
-        <div className="transcript-progress-bar__info">
-          {hasProgress ? (
-            <span>{transcribedChunks} / {totalChunksToTranscribe} chunks ({Math.round(progressPct)}%)</span>
-          ) : (
-            <span>{status === 'Idle' ? t('transcriptEmpty') : t('liveTranscribing')}</span>
-          )}
         </div>
       </section>
     </section>
