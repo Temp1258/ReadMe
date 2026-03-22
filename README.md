@@ -1,15 +1,30 @@
 # ReadMe
 
-ReadMe is a lightweight Chrome/Edge extension for chat. This repository now includes Issue #1 scaffold work and Issue #2 login/token storage in the popup UI.
+ReadMe is a lightweight Chrome/Edge extension that records audio and transcribes it in real time. It captures microphone input, browser tab audio, or both, then uses cloud STT APIs to produce a live transcript. After recording, an AI summary extracts key points and action items automatically.
 
-## Extension (`/extension`)
+## Features
 
-The extension is built with:
+- **Multi-source recording** — Microphone, tab audio, or mixed (tab + mic)
+- **Real-time transcription** — Audio is chunked every ~12 seconds and transcribed on the fly
+- **Batch transcription fallback** — If live transcription misses anything, a batch pass with overlap deduplication fills the gaps
+- **Multiple STT providers** — OpenAI Whisper, Deepgram Nova-2, or Mock (no API key required)
+- **AI summary** — One-click summary powered by GPT-4o-mini: concise summary, key points, and action items
+- **Session management** — All recordings are stored locally in IndexedDB with full session history
+- **Export** — Download transcripts as TXT, Markdown, or SRT (subtitles with timestamps)
+- **Audio playback** — Replay recordings directly in the popup
+- **Privacy-first** — All data stays in your browser; only audio chunks are sent to the STT API you configure
+- **i18n** — English and Chinese UI
+- **Themes** — Light and dark mode
 
-- Vite
-- React
-- TypeScript
-- Manifest V3
+## Tech stack
+
+- Vite + React + TypeScript
+- Chrome Manifest V3
+- Offscreen document for audio recording and STT processing
+- IndexedDB for local session and audio chunk storage
+- `chrome.storage.local` for settings persistence
+
+## Getting started
 
 ### 1) Install dependencies
 
@@ -18,79 +33,101 @@ cd extension
 npm install
 ```
 
-### 2) Run development server
-
-```bash
-npm run dev
-```
-
-### 3) Build extension assets
+### 2) Build the extension
 
 ```bash
 npm run build
 ```
 
-The production build output is generated in `extension/dist`.
+### 3) Load in Chrome / Edge
 
-### 4) Load the unpacked extension in Chrome
-
-1. Build the extension with `npm run build`.
-2. Open Chrome and go to `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the **`extension` folder** (do not select `extension/dist`). Chrome must load `extension/manifest.json`, which is Manifest V3 and includes `"offscreen_document": "dist/src/offscreen.html"`.
-6. After every rebuild, click **Reload** on the extension card to pick up the newest `dist` bundle.
-7. Open the extension popup.
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the **`extension` folder** (not `extension/dist`). The root `extension/manifest.json` references build output under `dist/`.
+5. After every rebuild, click **Reload** on the extension card.
 
 Notes:
 - `extension/manifest.json` and `extension/public/manifest.json` are both MV3 manifests and should stay aligned.
-- Runtime pages should come from `dist/*` (for example `chrome-extension://<id>/dist/src/offscreen.html`), not from `src/*`.
+- Runtime pages are served from `dist/*` (e.g. `chrome-extension://<id>/dist/src/offscreen.html`).
 
-## Login flow (Issue #2)
+### 4) Configure an STT provider
 
-The popup now supports:
+1. Open the extension popup and go to **Settings**.
+2. Click **Manage API key** to open the Options page.
+3. Choose a provider (OpenAI Whisper or Deepgram Nova-2) and paste your API key.
+4. Save. The key is stored in `chrome.storage.local`.
 
-- Email + password login via `POST http://localhost:8080/auth/login`
-- Mock login fallback for local UI testing when backend is unavailable
-- Auth persistence in `chrome.storage.local` (`token` + `email`)
-- Logout that clears `chrome.storage.local`
+To test without an API key, select **Mock** — the extension will generate placeholder transcription text so you can validate the full pipeline.
 
-### Test login with backend
-
-1. Start a backend locally at `http://localhost:8080` that accepts `POST /auth/login` and returns JSON with an `accessToken` field.
-2. Open the extension popup.
-3. Enter email/password and click **Login**.
-4. Verify the popup shows the **Chats** placeholder screen.
-5. Close/reopen the popup and verify auth is still persisted.
-
-### Test login in mock mode (no backend required)
+### 5) Record and transcribe
 
 1. Open the extension popup.
-2. Enter an email address (password optional for mock mode).
-3. Click **Mock Login**.
-4. Verify the popup shows the **Chats** placeholder screen.
-5. Click **Logout** and verify the login form is shown again.
+2. Select an audio source: **Microphone**, **Tab audio**, or **Mix (tab + mic)**.
+3. Click **Start**. The transcript appears live as audio is processed.
+4. Click **Stop** when finished.
+5. Switch to the **Notes** tab to review sessions, generate an AI summary, or export.
 
 ## Available scripts
 
 From the `extension` directory:
 
-- `npm run dev` - starts the Vite development server
-- `npm run build` - type-checks and creates the production build
-- `npm run preview` - previews the built app locally
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Type-check and create a production build |
+| `npm run preview` | Preview the built app locally |
+| `npm test` | Run unit tests with Vitest |
 
-## STT pipeline (Issue #13)
+## Project structure
 
-The offscreen recorder now chunks audio every ~12 seconds and transcribes chunks in FIFO order via Whisper.
+```
+extension/
+  src/
+    App.tsx                  # Main popup UI
+    main.tsx                 # Popup entry point
+    options.tsx              # Options page (API key management)
+    service_worker.ts        # MV3 background service worker
+    offscreen.ts             # Offscreen document entry
+    offscreen/
+      recording.ts           # Audio recording pipeline
+      segmentation.ts        # WebM segmentation for batch transcription
+      transcription.ts       # Batch transcription processor
+      live-transcribe.ts     # Real-time transcription queue
+      state.ts               # Centralized offscreen state
+    stt/
+      whisper.ts             # OpenAI Whisper API integration
+      deepgram.ts            # Deepgram API integration
+      llm.ts                 # LLM-based AI summary generation
+    components/
+      TranscriptionView.tsx  # Live transcription controls and display
+      NotesView.tsx          # Session list, search, export, and AI summary
+      SettingsView.tsx       # Theme, language, and provider settings
+      AudioPlayer.tsx        # Audio playback with seek controls
+    db/
+      indexeddb.ts           # IndexedDB schema and CRUD operations
+    utils/
+      dedup.ts               # Overlap deduplication for transcript segments
+      export.ts              # TXT / Markdown / SRT export formatters
+      format.ts              # Timestamp and duration formatting
+      webm.ts                # WebM binary utilities
+      chrome-storage.ts      # Chrome storage API helpers
+    state/
+      reducer.ts             # Redux-style app state reducer
+    i18n.ts                  # Internationalization (en / zh)
+    errors.ts                # Unified error hierarchy
+    settings.ts              # Extension settings management
+    types.ts                 # Shared TypeScript types
+  public/
+    manifest.json            # Extension manifest template
+    icons/                   # Extension icons
+    branding/                # Logo assets
+  manifest.json              # Root manifest aligned with build output
+docs/
+  API.md                     # REST API contract (for future backend)
+  PROJECT_STRUCTURE.md       # Project structure overview
+```
 
-### Set API key (MVP)
+## License
 
-1. Open the extension popup and sign in.
-2. In **Transcription**, paste your Whisper/OpenAI API key into **Whisper API Key**.
-3. Click **Save API Key** (stored in `chrome.storage.local`).
-4. Click **Start** to begin listening/transcribing.
-
-### Test without a real API key
-
-If no API key is saved, the extension skips network requests and appends mock lines such as `[mock] chunk 1 text`.
-This allows validating chunk ordering and live transcript UI without external dependencies.
+See [LICENSE](LICENSE).
