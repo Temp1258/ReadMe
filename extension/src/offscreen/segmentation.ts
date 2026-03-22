@@ -8,6 +8,7 @@ import {
 } from './constants';
 import { transcribeSegmentBlob } from './transcription';
 import { state, updateStatus } from './state';
+import { getAudioDurationMs } from '../utils/audio-duration';
 import { CLUSTER_MARKER, EBML_MAGIC, HEADER_SCAN_LIMIT_BYTES, findMarkerIndex, startsWithMarker, bytesToHex } from '../utils/webm';
 
 type SegmentChunk = {
@@ -316,6 +317,22 @@ export async function transcribeRecordingInSegments(recordingSession: RecordingS
   state.totalChunksToTranscribe = totalSegments;
   state.transcribedChunks = 0;
 
+  // Measure actual audio duration of each segment blob (without overlap) for accurate timing
+  let cumulativeOffsetMs = 0;
+  const measuredTimings: Array<{ startOffsetMs: number; endOffsetMs: number }> = [];
+
+  for (const segment of segmentBlobs) {
+    const measuredMs = await getAudioDurationMs(segment.blob);
+    if (measuredMs !== null) {
+      measuredTimings.push({ startOffsetMs: cumulativeOffsetMs, endOffsetMs: cumulativeOffsetMs + measuredMs });
+      cumulativeOffsetMs += measuredMs;
+    } else {
+      // Fallback to wall-clock based timing from chunk createdAt
+      measuredTimings.push({ startOffsetMs: segment.startOffsetMs, endOffsetMs: segment.endOffsetMs });
+      cumulativeOffsetMs = segment.endOffsetMs;
+    }
+  }
+
   for (const [index, segment] of segmentBlobs.entries()) {
     const segNumber = index + 1;
     let transcribeBlob = segment.blob;
@@ -349,12 +366,13 @@ export async function transcribeRecordingInSegments(recordingSession: RecordingS
         ? `segFirst4Hex=${segFirst4Hex} segFirst64Hex=${segFirst64Hex}`
         : `segFirst4Hex=${segFirst4Hex}`;
 
+    const timing = measuredTimings[index];
     console.info(
-      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${transcribeBlob.size} type=${transcribeBlob.type || '(empty)'} headerPrepended=${headerPrependedForUpload} overlapMs=${overlapAppliedMs} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} ${segHexLog}`,
+      `[segmentation] upload seg=${segNumber}/${totalSegments} size=${transcribeBlob.size} type=${transcribeBlob.type || '(empty)'} headerPrepended=${headerPrependedForUpload} overlapMs=${overlapAppliedMs} headerLen=${extractedHeaderLen} markerIndex=${headerMarkerIndex} scanLen=${headerScanLen} timing=${timing.startOffsetMs}-${timing.endOffsetMs}ms ${segHexLog}`,
     );
     await transcribeSegmentBlob(transcribeBlob, segNumber, totalSegments, {
-      startOffsetMs: segment.startOffsetMs,
-      endOffsetMs: segment.endOffsetMs,
+      startOffsetMs: timing.startOffsetMs,
+      endOffsetMs: timing.endOffsetMs,
     });
 
     state.transcribedChunks = segNumber;

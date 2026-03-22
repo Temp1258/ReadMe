@@ -1,10 +1,11 @@
-import { state, inMemoryApiKey, inMemoryDeepgramApiKey, activeProvider, broadcast, updateStatus } from './state';
+import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, broadcast, updateStatus, liveCumulativeAudioOffsetMs, advanceLiveCumulativeAudioOffset } from './state';
 import { appendSessionSegment } from '../db/indexeddb';
 import { transcribeAudioBlob } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
 import { CHUNK_MIN_BYTES, LIVE_TRANSCRIBE_CHUNK_COUNT } from './constants';
 import { extractWebmHeaderFromBlob } from '../utils/webm';
 import { removeOverlapPrefix } from '../utils/dedup';
+import { getAudioDurationMs } from '../utils/audio-duration';
 
 async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   if (state.webmHeaderExtracted) return;
@@ -90,7 +91,8 @@ async function transcribeBatch(
 ): Promise<void> {
   const apiKey = inMemoryApiKey;
   const deepgramKey = inMemoryDeepgramApiKey;
-  if (!apiKey && !deepgramKey) return;
+  const siliconflowKey = inMemorySiliconflowApiKey;
+  if (!apiKey && !deepgramKey && !siliconflowKey) return;
 
   const mergedBlob = buildTranscribableBlob(chunks);
   if (mergedBlob.size < CHUNK_MIN_BYTES) return;
@@ -104,6 +106,14 @@ async function transcribeBatch(
     let text: string;
     if (activeProvider === 'deepgram' && deepgramKey) {
       text = await transcribeWithDeepgram(mergedBlob, { apiKey: deepgramKey });
+    } else if (activeProvider === 'siliconflow' && siliconflowKey) {
+      text = await transcribeAudioBlob(mergedBlob, {
+        apiKey: siliconflowKey,
+        model: 'FunAudioLLM/SenseVoiceSmall',
+        endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+        fileName: `live-${startSeq}-${endSeq}.webm`,
+        maxRetries: 2,
+      });
     } else if (apiKey) {
       text = await transcribeAudioBlob(mergedBlob, {
         apiKey,
@@ -117,6 +127,11 @@ async function transcribeBatch(
 
     const trimmed = text?.trim();
     if (!trimmed) {
+      // Advance cumulative offset even for empty results so timing stays accurate
+      const emptyDurationMs = await getAudioDurationMs(mergedBlob);
+      if (emptyDurationMs !== null) {
+        advanceLiveCumulativeAudioOffset(emptyDurationMs);
+      }
       state.transcribedChunks = endSeq;
       updateStatus(state.status, state.detail);
       return;
@@ -124,18 +139,29 @@ async function transcribeBatch(
 
     const deduped = removeOverlapPrefix(state.transcript, trimmed);
     if (!deduped) {
+      // Even when deduped to empty, advance cumulative offset so next segment starts correctly
+      const skipDurationMs = await getAudioDurationMs(mergedBlob);
+      if (skipDurationMs !== null) {
+        advanceLiveCumulativeAudioOffset(skipDurationMs);
+      }
       state.transcribedChunks = endSeq;
       updateStatus(state.status, state.detail);
       return;
     }
 
-    const recordingSession = state.recordingSession;
-    const startOffsetMs = recordingSession
-      ? Math.max(0, chunks[0].createdAt - recordingSession.startTime - 30000)
-      : undefined;
-    const endOffsetMs = recordingSession
-      ? Math.max(0, chunks[chunks.length - 1].createdAt - recordingSession.startTime)
-      : undefined;
+    const measuredDurationMs = await getAudioDurationMs(mergedBlob);
+    const startOffsetMs = liveCumulativeAudioOffsetMs;
+    let endOffsetMs: number;
+    if (measuredDurationMs !== null) {
+      endOffsetMs = startOffsetMs + measuredDurationMs;
+    } else {
+      // Fallback: estimate from wall-clock timestamps
+      const recordingSession = state.recordingSession;
+      endOffsetMs = recordingSession
+        ? Math.max(startOffsetMs, chunks[chunks.length - 1].createdAt - recordingSession.startTime)
+        : startOffsetMs;
+    }
+    advanceLiveCumulativeAudioOffset(measuredDurationMs ?? (endOffsetMs - startOffsetMs));
 
     if (state.activeSessionId) {
       const persisted = await appendSessionSegment(state.activeSessionId, deduped, {

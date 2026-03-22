@@ -5,7 +5,7 @@ import {
   updateRecordingSession,
   updateSessionState,
 } from '../db/indexeddb';
-import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings } from './state';
+import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings, resetLiveCumulativeAudioOffset } from './state';
 import type { AudioSource } from './state';
 import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
@@ -344,6 +344,7 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
   state.liveTranscribeRunning = false;
   state.webmHeader = null;
   state.webmHeaderExtracted = false;
+  resetLiveCumulativeAudioOffset();
 
   broadcast({
     type: 'TRANSCRIPT_UPDATE',
