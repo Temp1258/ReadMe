@@ -1,8 +1,8 @@
 import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, broadcast, updateStatus, liveCumulativeAudioOffsetMs, advanceLiveCumulativeAudioOffset } from './state';
-import { appendSessionSegment } from '../db/indexeddb';
+import { appendSessionSegment, insertSessionSegmentByTime } from '../db/indexeddb';
 import { transcribeAudioBlob } from '../stt/whisper';
 import { transcribeWithDeepgram } from '../stt/deepgram';
-import { CHUNK_MIN_BYTES, LIVE_TRANSCRIBE_CHUNK_COUNT } from './constants';
+import { CHUNK_MIN_BYTES, LIVE_TRANSCRIBE_CHUNK_COUNT, TRANSCRIBE_MAX_RETRIES, TRANSCRIBE_INITIAL_BACKOFF_MS } from './constants';
 import { extractWebmHeaderFromBlob } from '../utils/webm';
 import { removeOverlapPrefix } from '../utils/dedup';
 import { getAudioDurationMs } from '../utils/audio-duration';
@@ -86,6 +86,41 @@ export async function flushLiveTranscribeQueue(): Promise<void> {
   }
 }
 
+async function callTranscriptionApi(
+  blob: Blob,
+  startSeq: number,
+  endSeq: number,
+): Promise<string> {
+  const apiKey = inMemoryApiKey;
+  const deepgramKey = inMemoryDeepgramApiKey;
+  const siliconflowKey = inMemorySiliconflowApiKey;
+
+  if (activeProvider === 'deepgram' && deepgramKey) {
+    return transcribeWithDeepgram(blob, { apiKey: deepgramKey });
+  }
+
+  if (activeProvider === 'siliconflow' && siliconflowKey) {
+    return transcribeAudioBlob(blob, {
+      apiKey: siliconflowKey,
+      model: 'FunAudioLLM/SenseVoiceSmall',
+      endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+      fileName: `live-${startSeq}-${endSeq}.webm`,
+      maxRetries: 1,
+    });
+  }
+
+  if (apiKey) {
+    return transcribeAudioBlob(blob, {
+      apiKey,
+      model: 'whisper-1',
+      fileName: `live-${startSeq}-${endSeq}.webm`,
+      maxRetries: 1,
+    });
+  }
+
+  throw new Error('No API key available');
+}
+
 async function transcribeBatch(
   chunks: Array<{ blob: Blob; seq: number; createdAt: number }>,
 ): Promise<void> {
@@ -102,92 +137,154 @@ async function transcribeBatch(
   const sizeMB = (mergedBlob.size / (1024 * 1024)).toFixed(2);
   console.info(`[live-transcribe] transcribing chunks ${startSeq}-${endSeq} (${sizeMB}MB) provider=${activeProvider}`);
 
-  try {
-    let text: string;
-    if (activeProvider === 'deepgram' && deepgramKey) {
-      text = await transcribeWithDeepgram(mergedBlob, { apiKey: deepgramKey });
-    } else if (activeProvider === 'siliconflow' && siliconflowKey) {
-      text = await transcribeAudioBlob(mergedBlob, {
-        apiKey: siliconflowKey,
-        model: 'FunAudioLLM/SenseVoiceSmall',
-        endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
-        fileName: `live-${startSeq}-${endSeq}.webm`,
-        maxRetries: 2,
-      });
-    } else if (apiKey) {
-      text = await transcribeAudioBlob(mergedBlob, {
-        apiKey,
-        model: 'whisper-1',
-        fileName: `live-${startSeq}-${endSeq}.webm`,
-        maxRetries: 2,
-      });
-    } else {
-      return;
-    }
+  // Measure duration upfront so we can always advance the offset
+  const measuredDurationMs = await getAudioDurationMs(mergedBlob);
+  const startOffsetMs = liveCumulativeAudioOffsetMs;
+  let endOffsetMs: number;
+  if (measuredDurationMs !== null) {
+    endOffsetMs = startOffsetMs + measuredDurationMs;
+  } else {
+    const recordingSession = state.recordingSession;
+    endOffsetMs = recordingSession
+      ? Math.max(startOffsetMs, chunks[chunks.length - 1].createdAt - recordingSession.startTime)
+      : startOffsetMs;
+  }
 
-    const trimmed = text?.trim();
-    if (!trimmed) {
-      // Advance cumulative offset even for empty results so timing stays accurate
-      const emptyDurationMs = await getAudioDurationMs(mergedBlob);
-      if (emptyDurationMs !== null) {
-        advanceLiveCumulativeAudioOffset(emptyDurationMs);
+  // Always advance the offset immediately so subsequent batches get correct timing
+  advanceLiveCumulativeAudioOffset(measuredDurationMs ?? (endOffsetMs - startOffsetMs));
+
+  // Retry loop with exponential backoff
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
+    try {
+      const text = await callTranscriptionApi(mergedBlob, startSeq, endSeq);
+
+      const trimmed = text?.trim();
+      if (!trimmed) {
+        state.transcribedChunks = endSeq;
+        updateStatus(state.status, state.detail);
+        return;
       }
+
+      const deduped = removeOverlapPrefix(state.transcript, trimmed);
+      if (!deduped) {
+        state.transcribedChunks = endSeq;
+        updateStatus(state.status, state.detail);
+        return;
+      }
+
+      if (state.activeSessionId) {
+        const persisted = await appendSessionSegment(state.activeSessionId, deduped, {
+          startOffsetMs,
+          endOffsetMs,
+        });
+        state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${deduped}` : deduped);
+      } else {
+        state.transcript = state.transcript ? `${state.transcript}\n${deduped}` : deduped;
+      }
+
+      broadcast({
+        type: 'TRANSCRIPT_UPDATE',
+        payload: {
+          seq: endSeq,
+          text: deduped,
+          transcript: state.transcript,
+        },
+      });
+
       state.transcribedChunks = endSeq;
       updateStatus(state.status, state.detail);
-      return;
-    }
 
-    const deduped = removeOverlapPrefix(state.transcript, trimmed);
-    if (!deduped) {
-      // Even when deduped to empty, advance cumulative offset so next segment starts correctly
-      const skipDurationMs = await getAudioDurationMs(mergedBlob);
-      if (skipDurationMs !== null) {
-        advanceLiveCumulativeAudioOffset(skipDurationMs);
+      console.info(`[live-transcribe] success chunks ${startSeq}-${endSeq} attempt=${attempt}: "${deduped.slice(0, 80)}..."`);
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < TRANSCRIBE_MAX_RETRIES) {
+        const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+        console.warn(`[live-transcribe] attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES} failed chunks ${startSeq}-${endSeq}: ${lastError.message}, retrying in ${backoffMs}ms`);
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
       }
-      state.transcribedChunks = endSeq;
-      updateStatus(state.status, state.detail);
-      return;
+    }
+  }
+
+  // All retries exhausted — save to failed queue for end-of-recording recovery
+  console.warn(`[live-transcribe] all ${TRANSCRIBE_MAX_RETRIES} attempts failed chunks ${startSeq}-${endSeq}: ${lastError?.message}`);
+  state.liveFailedBatches.push({
+    mergedBlob,
+    startSeq,
+    endSeq,
+    startOffsetMs,
+    endOffsetMs,
+  });
+  console.info(`[live-transcribe] queued failed batch for recovery (${state.liveFailedBatches.length} pending)`);
+
+  state.transcribedChunks = endSeq;
+  updateStatus(state.status, state.detail);
+}
+
+export async function retryFailedBatches(): Promise<void> {
+  const failedBatches = state.liveFailedBatches.splice(0);
+  if (failedBatches.length === 0) return;
+
+  console.info(`[live-transcribe] retrying ${failedBatches.length} failed batch(es)`);
+
+  for (const batch of failedBatches) {
+    let recovered = false;
+
+    for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
+      try {
+        const text = await callTranscriptionApi(batch.mergedBlob, batch.startSeq, batch.endSeq);
+        const trimmed = text?.trim();
+        if (!trimmed) {
+          console.info(`[live-transcribe] recovery chunks ${batch.startSeq}-${batch.endSeq}: empty result, skipping`);
+          recovered = true;
+          break;
+        }
+
+        if (state.activeSessionId) {
+          const persisted = await insertSessionSegmentByTime(state.activeSessionId, trimmed, {
+            startOffsetMs: batch.startOffsetMs,
+            endOffsetMs: batch.endOffsetMs,
+          });
+          if (persisted) {
+            state.transcript = persisted.transcript;
+          }
+        } else {
+          state.transcript = state.transcript ? `${state.transcript}\n${trimmed}` : trimmed;
+        }
+
+        broadcast({
+          type: 'TRANSCRIPT_UPDATE',
+          payload: {
+            seq: batch.endSeq,
+            text: trimmed,
+            transcript: state.transcript,
+          },
+        });
+
+        console.info(`[live-transcribe] recovery success chunks ${batch.startSeq}-${batch.endSeq} attempt=${attempt}: "${trimmed.slice(0, 80)}..."`);
+        recovered = true;
+        break;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (attempt < TRANSCRIBE_MAX_RETRIES) {
+          const backoffMs = TRANSCRIBE_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+          console.warn(`[live-transcribe] recovery attempt ${attempt}/${TRANSCRIBE_MAX_RETRIES} failed chunks ${batch.startSeq}-${batch.endSeq}: ${msg}, retrying in ${backoffMs}ms`);
+          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+        } else {
+          console.error(`[live-transcribe] recovery failed chunks ${batch.startSeq}-${batch.endSeq} after ${TRANSCRIBE_MAX_RETRIES} attempts: ${msg}`);
+        }
+      }
     }
 
-    const measuredDurationMs = await getAudioDurationMs(mergedBlob);
-    const startOffsetMs = liveCumulativeAudioOffsetMs;
-    let endOffsetMs: number;
-    if (measuredDurationMs !== null) {
-      endOffsetMs = startOffsetMs + measuredDurationMs;
-    } else {
-      // Fallback: estimate from wall-clock timestamps
-      const recordingSession = state.recordingSession;
-      endOffsetMs = recordingSession
-        ? Math.max(startOffsetMs, chunks[chunks.length - 1].createdAt - recordingSession.startTime)
-        : startOffsetMs;
+    if (!recovered) {
+      // Mark as permanently skipped in the session
+      if (state.activeSessionId) {
+        await insertSessionSegmentByTime(state.activeSessionId, `[skipped] chunks ${batch.startSeq}-${batch.endSeq}`, {
+          startOffsetMs: batch.startOffsetMs,
+          endOffsetMs: batch.endOffsetMs,
+        });
+      }
     }
-    advanceLiveCumulativeAudioOffset(measuredDurationMs ?? (endOffsetMs - startOffsetMs));
-
-    if (state.activeSessionId) {
-      const persisted = await appendSessionSegment(state.activeSessionId, deduped, {
-        startOffsetMs,
-        endOffsetMs,
-      });
-      state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${deduped}` : deduped);
-    } else {
-      state.transcript = state.transcript ? `${state.transcript}\n${deduped}` : deduped;
-    }
-
-    broadcast({
-      type: 'TRANSCRIPT_UPDATE',
-      payload: {
-        seq: endSeq,
-        text: deduped,
-        transcript: state.transcript,
-      },
-    });
-
-    state.transcribedChunks = endSeq;
-    updateStatus(state.status, state.detail);
-
-    console.info(`[live-transcribe] success chunks ${startSeq}-${endSeq}: "${deduped.slice(0, 80)}..."`);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.warn(`[live-transcribe] failed chunks ${startSeq}-${endSeq}: ${msg}`);
   }
 }

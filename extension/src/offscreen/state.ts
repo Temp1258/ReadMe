@@ -63,6 +63,13 @@ export const state = {
   liveTranscribeEnabled: true,
   liveTranscribeQueue: [] as Array<{ blob: Blob; seq: number; createdAt: number }>,
   liveTranscribeRunning: false,
+  liveFailedBatches: [] as Array<{
+    mergedBlob: Blob;
+    startSeq: number;
+    endSeq: number;
+    startOffsetMs: number;
+    endOffsetMs: number;
+  }>,
   webmHeader: null as Uint8Array | null,
   webmHeaderExtracted: false,
   transcribedChunks: 0,
