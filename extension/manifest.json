@@ -31,6 +31,7 @@
   ],
   "host_permissions": [
     "https://api.openai.com/*",
-    "https://api.deepgram.com/*"
+    "https://api.deepgram.com/*",
+    "https://api.siliconflow.cn/*"
   ]
 }
