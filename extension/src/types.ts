@@ -39,10 +39,11 @@ export type RuntimeEventMessage =
 export type GetSttSettingsResponse =
   | {
       ok: true;
-      provider: 'openai' | 'deepgram' | 'mock';
+      provider: 'openai' | 'deepgram' | 'siliconflow' | 'mock';
       keyPresent: boolean;
       apiKey?: string;
       deepgramApiKey?: string;
+      siliconflowApiKey?: string;
     }
   | {
       ok: false;
