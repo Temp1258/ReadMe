@@ -32,7 +32,6 @@ export function TranscriptionView({
   selectedSource,
   selectedDeviceId,
   devices,
-  transcriptText,
   error,
   t,
   onStartListening,
@@ -73,9 +72,9 @@ export function TranscriptionView({
             <span className="status-metrics__value">{recordingDiagnostics.mbPerMin.toFixed(2)} MB/min</span>
           </p>
           <p className="status-metrics__item" role="listitem">
-            <span className="status-metrics__label">Est. 25MB</span>
+            <span className="status-metrics__label">Chunks</span>
             <span className="status-metrics__value">
-              {recordingDiagnostics.estMinTo25MB === null ? 'n/a' : `${recordingDiagnostics.estMinTo25MB.toFixed(1)} min`}
+              {transcribedChunks} / {totalChunksToTranscribe}
             </span>
           </p>
         </div>
@@ -166,11 +165,6 @@ export function TranscriptionView({
             <span>{transcribedChunks} / {totalChunksToTranscribe} chunks ({Math.round(progressPct)}%)</span>
           ) : (
             <span>{status === 'Idle' ? t('transcriptEmpty') : t('liveTranscribing')}</span>
-          )}
-          {transcriptText && (
-            <span className="transcript-progress-bar__hint">
-              {transcriptText.length > 60 ? `…${transcriptText.slice(-60)}` : transcriptText}
-            </span>
           )}
         </div>
       </section>

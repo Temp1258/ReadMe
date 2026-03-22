@@ -746,7 +746,7 @@ h3 {
 .notes-detail {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .notes-list__item {
