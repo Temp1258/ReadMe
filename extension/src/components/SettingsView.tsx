@@ -109,39 +109,16 @@ export function SettingsView({
       <div className="settings-card">
         <h2>{t('providerSection')}</h2>
         <p className="panel__body">{t('providerStatus')}: {providerLabelMap[provider]} · {providerConfigured ? t('configured') : t('notConfigured')}</p>
-        <div className="settings-toggle-row">
-          <p className="panel__body">{t('source')}</p>
-          <div className="inline-actions">
-            <button
-              className={`button button--secondary ${provider === 'openai' ? 'button--selected' : ''}`}
-              onClick={() => void handleProviderChange('openai')}
-              type="button"
-            >
-              {t('providerOpenai')}
-            </button>
-            <button
-              className={`button button--secondary ${provider === 'deepgram' ? 'button--selected' : ''}`}
-              onClick={() => void handleProviderChange('deepgram')}
-              type="button"
-            >
-              {t('providerDeepgram')}
-            </button>
-            <button
-              className={`button button--secondary ${provider === 'siliconflow' ? 'button--selected' : ''}`}
-              onClick={() => void handleProviderChange('siliconflow')}
-              type="button"
-            >
-              {t('providerSiliconflow')}
-            </button>
-            <button
-              className={`button button--secondary ${provider === 'mock' ? 'button--selected' : ''}`}
-              onClick={() => void handleProviderChange('mock')}
-              type="button"
-            >
-              {t('providerMock')}
-            </button>
-          </div>
-        </div>
+        <select
+          className="form__input"
+          value={provider}
+          onChange={(e) => void handleProviderChange(e.target.value as SttProvider)}
+        >
+          <option value="openai">{t('providerOpenai')}</option>
+          <option value="deepgram">{t('providerDeepgram')}</option>
+          <option value="siliconflow">{t('providerSiliconflow')}</option>
+          <option value="mock">{t('providerMock')}</option>
+        </select>
 
         <button className="button button--tertiary settings-link" onClick={onOpenSettings} type="button">
           {t('manageApi')}
