@@ -7,6 +7,19 @@ import { extractWebmHeaderFromBlob } from '../utils/webm';
 import { removeOverlapPrefix } from '../utils/dedup';
 import { getAudioDurationMs } from '../utils/audio-duration';
 
+/**
+ * Promise tracking the in-flight processLiveTranscribeQueue so that
+ * flushLiveTranscribeQueue can await it before draining remaining chunks.
+ */
+let liveTranscribeProcessingPromise: Promise<void> | null = null;
+
+/**
+ * The last chunk blob from the previous transcription batch.
+ * Prepended to the next batch to provide audio context overlap,
+ * improving transcription accuracy at segment boundaries.
+ */
+let previousBatchLastChunk: Blob | null = null;
+
 async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   if (state.webmHeaderExtracted) return;
   state.webmHeaderExtracted = true;
@@ -21,13 +34,18 @@ async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   console.info(`[live-transcribe] WebM header extracted: ${state.webmHeader.byteLength} bytes`);
 }
 
-function buildTranscribableBlob(chunks: Array<{ blob: Blob }>): Blob {
+function buildTranscribableBlob(chunks: Array<{ blob: Blob }>, overlapChunk?: Blob | null): Blob {
   const parts: BlobPart[] = [];
 
   if (state.webmHeader) {
     const headerCopy = new ArrayBuffer(state.webmHeader.byteLength);
     new Uint8Array(headerCopy).set(state.webmHeader);
     parts.push(new Blob([headerCopy]));
+  }
+
+  // Prepend the overlap chunk from the previous batch for context
+  if (overlapChunk) {
+    parts.push(overlapChunk);
   }
 
   for (const chunk of chunks) {
@@ -48,7 +66,9 @@ export function enqueueChunkForLiveTranscription(blob: Blob, seq: number, create
   }
 
   if (state.liveTranscribeQueue.length >= LIVE_TRANSCRIBE_CHUNK_COUNT && !state.liveTranscribeRunning) {
-    void processLiveTranscribeQueue();
+    liveTranscribeProcessingPromise = processLiveTranscribeQueue();
+    // Prevent unhandled rejection on fire-and-forget
+    liveTranscribeProcessingPromise.catch(() => {});
   }
 }
 
@@ -66,10 +86,19 @@ async function processLiveTranscribeQueue(): Promise<void> {
     console.warn(`[live-transcribe] batch failed: ${msg}`);
   } finally {
     state.liveTranscribeRunning = false;
+    liveTranscribeProcessingPromise = null;
   }
 }
 
 export async function flushLiveTranscribeQueue(): Promise<void> {
+  // Wait for any in-flight processLiveTranscribeQueue to complete first.
+  // This prevents the race where processLiveTranscribeQueue already spliced
+  // the queue (making it appear empty) but hasn't finished transcription yet.
+  if (liveTranscribeProcessingPromise) {
+    await liveTranscribeProcessingPromise;
+    liveTranscribeProcessingPromise = null;
+  }
+
   if (state.liveTranscribeQueue.length === 0) return;
 
   state.liveTranscribeRunning = true;
@@ -86,22 +115,26 @@ export async function flushLiveTranscribeQueue(): Promise<void> {
   }
 }
 
-async function callTranscriptionApi(
+interface CapturedKeys {
+  apiKey: string | null;
+  deepgramKey: string | null;
+  siliconflowKey: string | null;
+  provider: typeof activeProvider;
+}
+
+function callTranscriptionApi(
   blob: Blob,
   startSeq: number,
   endSeq: number,
+  keys: CapturedKeys,
 ): Promise<string> {
-  const apiKey = inMemoryApiKey;
-  const deepgramKey = inMemoryDeepgramApiKey;
-  const siliconflowKey = inMemorySiliconflowApiKey;
-
-  if (activeProvider === 'deepgram' && deepgramKey) {
-    return transcribeWithDeepgram(blob, { apiKey: deepgramKey });
+  if (keys.provider === 'deepgram' && keys.deepgramKey) {
+    return transcribeWithDeepgram(blob, { apiKey: keys.deepgramKey });
   }
 
-  if (activeProvider === 'siliconflow' && siliconflowKey) {
+  if (keys.provider === 'siliconflow' && keys.siliconflowKey) {
     return transcribeAudioBlob(blob, {
-      apiKey: siliconflowKey,
+      apiKey: keys.siliconflowKey,
       model: 'FunAudioLLM/SenseVoiceSmall',
       endpoint: 'https://api.siliconflow.cn/v1/audio/transcriptions',
       fileName: `live-${startSeq}-${endSeq}.webm`,
@@ -109,36 +142,49 @@ async function callTranscriptionApi(
     });
   }
 
-  if (apiKey) {
+  if (keys.apiKey) {
     return transcribeAudioBlob(blob, {
-      apiKey,
+      apiKey: keys.apiKey,
       model: 'whisper-1',
       fileName: `live-${startSeq}-${endSeq}.webm`,
       maxRetries: 1,
     });
   }
 
-  throw new Error('No API key available');
+  return Promise.reject(new Error('No API key available'));
 }
 
 async function transcribeBatch(
   chunks: Array<{ blob: Blob; seq: number; createdAt: number }>,
 ): Promise<void> {
-  const apiKey = inMemoryApiKey;
-  const deepgramKey = inMemoryDeepgramApiKey;
-  const siliconflowKey = inMemorySiliconflowApiKey;
-  if (!apiKey && !deepgramKey && !siliconflowKey) return;
+  // Capture keys immediately (synchronously) so they remain valid even
+  // if stopRecording clears the module-level variables later.
+  const keys: CapturedKeys = {
+    apiKey: inMemoryApiKey,
+    deepgramKey: inMemoryDeepgramApiKey,
+    siliconflowKey: inMemorySiliconflowApiKey,
+    provider: activeProvider,
+  };
+  if (!keys.apiKey && !keys.deepgramKey && !keys.siliconflowKey) return;
 
-  const mergedBlob = buildTranscribableBlob(chunks);
+  // Build blob with overlap from previous batch for context accuracy
+  const overlapChunk = previousBatchLastChunk;
+  const mergedBlob = buildTranscribableBlob(chunks, overlapChunk);
   if (mergedBlob.size < CHUNK_MIN_BYTES) return;
+
+  // Save the last chunk of this batch as overlap for the next batch
+  previousBatchLastChunk = chunks[chunks.length - 1].blob;
 
   const startSeq = chunks[0].seq;
   const endSeq = chunks[chunks.length - 1].seq;
   const sizeMB = (mergedBlob.size / (1024 * 1024)).toFixed(2);
-  console.info(`[live-transcribe] transcribing chunks ${startSeq}-${endSeq} (${sizeMB}MB) provider=${activeProvider}`);
+  const hasOverlap = overlapChunk !== null;
+  console.info(`[live-transcribe] transcribing chunks ${startSeq}-${endSeq} (${sizeMB}MB) provider=${keys.provider} overlap=${hasOverlap}`);
 
-  // Measure duration upfront so we can always advance the offset
-  const measuredDurationMs = await getAudioDurationMs(mergedBlob);
+  // Measure duration of the ACTUAL new chunks only (without overlap) for accurate timing.
+  // The overlap chunk is only for transcription context, not for offset calculation.
+  const newChunksBlob = buildTranscribableBlob(chunks);
+  const measuredDurationMs = await getAudioDurationMs(newChunksBlob);
   const startOffsetMs = liveCumulativeAudioOffsetMs;
   let endOffsetMs: number;
   if (measuredDurationMs !== null) {
@@ -157,7 +203,7 @@ async function transcribeBatch(
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
     try {
-      const text = await callTranscriptionApi(mergedBlob, startSeq, endSeq);
+      const text = await callTranscriptionApi(mergedBlob, startSeq, endSeq, keys);
 
       const trimmed = text?.trim();
       if (!trimmed) {
@@ -222,7 +268,7 @@ async function transcribeBatch(
   updateStatus(state.status, state.detail);
 }
 
-export async function retryFailedBatches(): Promise<void> {
+export async function retryFailedBatches(keys: CapturedKeys): Promise<void> {
   const failedBatches = state.liveFailedBatches.splice(0);
   if (failedBatches.length === 0) return;
 
@@ -233,7 +279,7 @@ export async function retryFailedBatches(): Promise<void> {
 
     for (let attempt = 1; attempt <= TRANSCRIBE_MAX_RETRIES; attempt += 1) {
       try {
-        const text = await callTranscriptionApi(batch.mergedBlob, batch.startSeq, batch.endSeq);
+        const text = await callTranscriptionApi(batch.mergedBlob, batch.startSeq, batch.endSeq, keys);
         const trimmed = text?.trim();
         if (!trimmed) {
           console.info(`[live-transcribe] recovery chunks ${batch.startSeq}-${batch.endSeq}: empty result, skipping`);
@@ -278,7 +324,6 @@ export async function retryFailedBatches(): Promise<void> {
     }
 
     if (!recovered) {
-      // Mark as permanently skipped in the session
       if (state.activeSessionId) {
         await insertSessionSegmentByTime(state.activeSessionId, `[skipped] chunks ${batch.startSeq}-${batch.endSeq}`, {
           startOffsetMs: batch.startOffsetMs,
@@ -287,4 +332,9 @@ export async function retryFailedBatches(): Promise<void> {
       }
     }
   }
+}
+
+export function resetLiveTranscribeState(): void {
+  previousBatchLastChunk = null;
+  liveTranscribeProcessingPromise = null;
 }
