@@ -75,6 +75,12 @@ export const UI_COPY = {
     showTranscript: 'Transcript',
     showSummary: 'Summary',
     transcriptionProgress: 'Transcription progress',
+    metricDuration: 'Duration',
+    metricSize: 'Size',
+    metricRate: 'Rate',
+    metricChunks: 'Chunks',
+    configured: 'Configured',
+    notConfigured: 'Not configured',
   },
   zh: {
     appTitle: 'ReadMe',
@@ -149,6 +155,12 @@ export const UI_COPY = {
     showTranscript: '原文',
     showSummary: '摘要',
     transcriptionProgress: '转录进度',
+    metricDuration: '时长',
+    metricSize: '大小',
+    metricRate: '速率',
+    metricChunks: '分块',
+    configured: '已配置',
+    notConfigured: '未配置',
   },
 } as const;
 

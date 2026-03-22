@@ -7,6 +7,7 @@ type SettingsViewProps = {
   uiTheme: UITheme;
   uiLang: UILang;
   sttStatusLine: string;
+  sttConfigured: boolean;
   t: (key: TranslationKey) => string;
   onThemeChange: (theme: UITheme) => void;
   onLanguageChange: (lang: UILang) => void;
@@ -17,6 +18,7 @@ export function SettingsView({
   uiTheme,
   uiLang,
   sttStatusLine,
+  sttConfigured,
   t,
   onThemeChange,
   onLanguageChange,
@@ -98,7 +100,7 @@ export function SettingsView({
 
       <div className="settings-card">
         <h2>{t('providerSection')}</h2>
-        <p className="panel__body">{t('providerStatus')}: {sttStatusLine}</p>
+        <p className="panel__body">{t('providerStatus')}: {sttStatusLine} · {sttConfigured ? t('configured') : t('notConfigured')}</p>
         <div className="settings-toggle-row">
           <p className="panel__body">{t('source')}</p>
           <div className="inline-actions">

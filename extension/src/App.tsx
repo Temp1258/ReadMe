@@ -34,8 +34,8 @@ function App() {
 
   const {
     error, activeView, status, recordingDiagnostics,
-    devices, selectedDeviceId, selectedSource, transcriptText,
-    sttStatusLine, notesSessions, selectedSessionId,
+    devices, selectedDeviceId, selectedSource,
+    sttStatusLine, sttConfigured, notesSessions, selectedSessionId,
     notesLoading, notesError, notesSearch, exportToast,
     summaryLoading, uiTheme, uiLang,
   } = state;
@@ -72,7 +72,7 @@ function App() {
   useEffect(() => {
     Promise.all([loadSettings(), getSttDiagnosticsFromRuntime(), readUITheme(), readUILang()]).then(
       ([settings, sttSummary, savedTheme, savedLang]) => {
-        dispatch({ type: 'SET_STT_STATUS_LINE', payload: `Provider: ${sttSummary.providerLabel} · ${sttSummary.configurationLabel}` });
+        dispatch({ type: 'SET_STT_STATUS_LINE', payload: { providerLabel: sttSummary.providerLabel, configured: sttSummary.configurationLabel === 'Configured' } });
         if (sttSummary.error) {
           dispatch({ type: 'SET_ERROR', payload: sttSummary.error });
         }
@@ -476,13 +476,13 @@ function App() {
           status={status}
           recordingDiagnostics={recordingDiagnostics}
           sttStatusLine={sttStatusLine}
+          sttConfigured={sttConfigured}
           isRecordingActive={isRecordingActive}
           isAudioSourceLocked={isAudioSourceLocked}
           isMicrophoneLocked={isMicrophoneLocked}
           selectedSource={selectedSource}
           selectedDeviceId={selectedDeviceId}
           devices={devices}
-          transcriptText={transcriptText}
           error={error}
           t={t}
           onStartListening={handleStartListening}
@@ -518,6 +518,7 @@ function App() {
           uiTheme={uiTheme}
           uiLang={uiLang}
           sttStatusLine={sttStatusLine}
+          sttConfigured={sttConfigured}
           t={t}
           onThemeChange={(theme) => void handleThemeChange(theme)}
           onLanguageChange={(lang) => void handleLanguageChange(lang)}

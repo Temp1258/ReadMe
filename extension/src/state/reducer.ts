@@ -11,6 +11,7 @@ export type AppState = {
   selectedSource: AudioSource;
   transcriptText: string;
   sttStatusLine: string;
+  sttConfigured: boolean;
   notesSessions: SessionRecord[];
   selectedSessionId: string | null;
   notesLoading: boolean;
@@ -40,7 +41,8 @@ export const initialState: AppState = {
   selectedDeviceId: 'default',
   selectedSource: 'mic',
   transcriptText: '',
-  sttStatusLine: 'Provider: Unknown · Not configured',
+  sttStatusLine: 'Unknown',
+  sttConfigured: false,
   notesSessions: [],
   selectedSessionId: null,
   notesLoading: false,
@@ -61,7 +63,7 @@ export type AppAction =
   | { type: 'SET_SELECTED_DEVICE'; payload: string }
   | { type: 'SET_SELECTED_SOURCE'; payload: AudioSource }
   | { type: 'SET_TRANSCRIPT'; payload: string }
-  | { type: 'SET_STT_STATUS_LINE'; payload: string }
+  | { type: 'SET_STT_STATUS_LINE'; payload: { providerLabel: string; configured: boolean } }
   | { type: 'SET_NOTES_SESSIONS'; payload: SessionRecord[] }
   | { type: 'SET_SELECTED_SESSION'; payload: string | null }
   | { type: 'SET_NOTES_LOADING'; payload: boolean }
@@ -95,7 +97,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_TRANSCRIPT':
       return { ...state, transcriptText: action.payload };
     case 'SET_STT_STATUS_LINE':
-      return { ...state, sttStatusLine: action.payload };
+      return { ...state, sttStatusLine: action.payload.providerLabel, sttConfigured: action.payload.configured };
     case 'SET_NOTES_SESSIONS':
       return { ...state, notesSessions: action.payload };
     case 'SET_SELECTED_SESSION':
