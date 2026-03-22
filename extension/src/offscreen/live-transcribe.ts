@@ -189,5 +189,19 @@ async function transcribeBatch(
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.warn(`[live-transcribe] failed chunks ${startSeq}-${endSeq}: ${msg}`);
+
+    // Advance cumulative offset even on failure so subsequent segments
+    // don't inherit the skipped segment's time range.
+    try {
+      const failedDurationMs = await getAudioDurationMs(mergedBlob);
+      if (failedDurationMs !== null) {
+        advanceLiveCumulativeAudioOffset(failedDurationMs);
+      }
+    } catch {
+      // Best-effort: if duration measurement also fails, offset stays as-is
+    }
+
+    state.transcribedChunks = endSeq;
+    updateStatus(state.status, state.detail);
   }
 }
