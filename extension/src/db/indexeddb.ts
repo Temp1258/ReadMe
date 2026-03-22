@@ -191,6 +191,61 @@ export async function appendSessionSegment(
   return updated;
 }
 
+export async function insertSessionSegmentByTime(
+  sessionId: string,
+  text: string,
+  timing: { startOffsetMs: number; endOffsetMs: number },
+): Promise<SessionRecord | null> {
+  const normalized = text.trim();
+  if (!normalized) {
+    return getSession(sessionId);
+  }
+
+  const session = await getSession(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  // Find insertion position: place before the first segment whose startOffsetMs
+  // is greater than this segment's startOffsetMs.
+  let insertAt = session.segments.length;
+  for (let i = 0; i < session.segments.length; i++) {
+    const segStart = session.segments[i].startOffsetMs ?? 0;
+    if (segStart > timing.startOffsetMs) {
+      insertAt = i;
+      break;
+    }
+  }
+
+  const newSegment: SessionSegment = {
+    idx: 0, // will be reassigned below
+    ts: Date.now(),
+    text: normalized,
+    startOffsetMs: timing.startOffsetMs,
+    endOffsetMs: timing.endOffsetMs,
+  };
+
+  const newSegments = [...session.segments];
+  newSegments.splice(insertAt, 0, newSegment);
+
+  // Re-index all segments sequentially
+  for (let i = 0; i < newSegments.length; i++) {
+    newSegments[i] = { ...newSegments[i], idx: i + 1 };
+  }
+
+  // Rebuild full transcript from ordered segments
+  const transcript = newSegments.map((s) => s.text).join('\n');
+
+  const updated: SessionRecord = {
+    ...session,
+    transcript,
+    segments: newSegments,
+  };
+
+  await putSession(updated);
+  return updated;
+}
+
 export async function updateSessionAiSummary(sessionId: string, aiSummary: SessionAiSummary): Promise<SessionRecord | null> {
   const session = await getSession(sessionId);
   if (!session) {

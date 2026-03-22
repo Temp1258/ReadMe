@@ -9,7 +9,7 @@ import { state, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider,
 import type { AudioSource } from './state';
 import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
-import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue } from './live-transcribe';
+import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue, retryFailedBatches } from './live-transcribe';
 
 export async function setRecordingSessionError(sessionId: string): Promise<void> {
   try {
@@ -267,6 +267,12 @@ export async function stopRecording(): Promise<void> {
   // Flush any remaining live transcription chunks
   await flushLiveTranscribeQueue();
 
+  // Retry any batches that failed during live transcription
+  if (state.liveFailedBatches.length > 0) {
+    updateStatus('Transcribing', `Recovering ${state.liveFailedBatches.length} failed segment(s)...`);
+    await retryFailedBatches();
+  }
+
   const hasLiveTranscript = state.transcript.trim().length > 0;
 
   if (recordingSession && recordingSession.chunkCount > 0 && !hasLiveTranscript) {
@@ -342,6 +348,7 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
   state.transcript = '';
   state.liveTranscribeQueue = [];
   state.liveTranscribeRunning = false;
+  state.liveFailedBatches = [];
   state.webmHeader = null;
   state.webmHeaderExtracted = false;
   resetLiveCumulativeAudioOffset();
