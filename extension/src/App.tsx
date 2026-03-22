@@ -8,7 +8,6 @@ import { buildTxtExport, buildMarkdownExport, buildSrtExport, downloadTextFile }
 import { generateSummary } from './stt/llm';
 import {
   readSelectedDeviceId,
-  readSelectedAudioSource,
   persistSelectedAudioSource,
   persistSelectedDeviceId,
   readUITheme,
@@ -118,10 +117,9 @@ function App() {
         await ensureOffscreenDocument();
         const settings = await loadSettings();
         const defaultSource = normalizeAudioSource(settings.defaultSource);
-        const [snapshot, persistedDeviceId, persistedAudioSource, latestSession] = await Promise.all([
+        const [snapshot, persistedDeviceId, latestSession] = await Promise.all([
           queryStateFromOffscreen(),
           readSelectedDeviceId(),
-          readSelectedAudioSource(defaultSource),
           getLatestSession(),
         ]);
 
@@ -136,7 +134,7 @@ function App() {
           payload: {
             status: snapshot?.status ?? fallbackStatus,
             selectedDeviceId: snapshot?.selectedDeviceId ?? persistedDeviceId,
-            selectedSource: isRecording ? (snapshot?.selectedSource ?? persistedAudioSource) : persistedAudioSource,
+            selectedSource: isRecording ? (snapshot?.selectedSource ?? defaultSource) : defaultSource,
             transcriptText: liveTranscript || latestSession?.transcript || '',
             ...(snapshot?.diagnostics ? { recordingDiagnostics: snapshot.diagnostics } : {}),
           },
