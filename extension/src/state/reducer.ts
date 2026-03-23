@@ -3,6 +3,7 @@ import type { SessionRecord } from '../db/indexeddb';
 
 export type AppState = {
   error: string | null;
+  warning: string | null;
   activeView: AppView;
   status: AudioStatus;
   recordingDiagnostics: RecordingDiagnostics;
@@ -25,6 +26,7 @@ export type AppState = {
 
 export const initialState: AppState = {
   error: null,
+  warning: null,
   activeView: 'transcription',
   status: 'Idle',
   recordingDiagnostics: {
@@ -56,6 +58,7 @@ export const initialState: AppState = {
 
 export type AppAction =
   | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_WARNING'; payload: string | null }
   | { type: 'SET_ACTIVE_VIEW'; payload: AppView }
   | { type: 'SET_STATUS'; payload: AudioStatus }
   | { type: 'SET_DIAGNOSTICS'; payload: RecordingDiagnostics }
@@ -82,6 +85,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_ERROR':
       return { ...state, error: action.payload };
+    case 'SET_WARNING':
+      return { ...state, warning: action.payload };
     case 'SET_ACTIVE_VIEW':
       return { ...state, activeView: action.payload };
     case 'SET_STATUS':

@@ -126,7 +126,7 @@ function startDiagnosticsTimer(): void {
           warnedApproachingLimit = true;
           const remainMin = Math.ceil(remaining / 60000);
           console.warn(`[recording] approaching max duration limit, ${remainMin} min remaining`);
-          broadcast({ type: 'ERROR', payload: { message: `Recording will auto-stop in ${remainMin} minutes (max ${MAX_RECORDING_DURATION_MS / 3600000}h limit)` } });
+          broadcast({ type: 'WARNING', payload: { message: `Recording will auto-stop in ${remainMin} minutes (max ${MAX_RECORDING_DURATION_MS / 3600000}h limit)` } });
         }
 
         if (elapsed >= MAX_RECORDING_DURATION_MS) {

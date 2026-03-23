@@ -21,6 +21,7 @@ type TranscriptionViewProps = {
   selectedDeviceId: string;
   devices: DeviceOption[];
   error: string | null;
+  warning: string | null;
   t: (key: TranslationKey) => string;
   onStartListening: () => void;
   onStopListening: () => void;
@@ -39,6 +40,7 @@ export function TranscriptionView({
   selectedDeviceId,
   devices,
   error,
+  warning,
   t,
   onStartListening,
   onStopListening,
@@ -167,6 +169,7 @@ export function TranscriptionView({
         </div>
       </section>
 
+      {warning && <p className="notice">{warning}</p>}
       {error && <p className="error">{error}</p>}
 
       <section className="transcript-progress-panel">

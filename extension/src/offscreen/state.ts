@@ -29,7 +29,8 @@ export type RuntimeEventMessage =
       };
     }
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
-  | { type: 'ERROR'; payload: { message: string } };
+  | { type: 'ERROR'; payload: { message: string } }
+  | { type: 'WARNING'; payload: { message: string } };
 
 export type GetSttSettingsResponse =
   | {

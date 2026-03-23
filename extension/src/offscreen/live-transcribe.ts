@@ -226,6 +226,27 @@ async function transcribeBatch(
 
       const trimmed = text?.trim();
       if (!trimmed) {
+        // Silent chunk — emit [empty] marker so the user knows the chunk was processed
+        const emptyMarker = '[empty]';
+        if (state.activeSessionId) {
+          const persisted = await appendSessionSegment(state.activeSessionId, emptyMarker, {
+            startOffsetMs,
+            endOffsetMs,
+          });
+          state.transcript = persisted?.transcript ?? (state.transcript ? `${state.transcript}\n${emptyMarker}` : emptyMarker);
+        } else {
+          state.transcript = state.transcript ? `${state.transcript}\n${emptyMarker}` : emptyMarker;
+        }
+
+        broadcast({
+          type: 'TRANSCRIPT_UPDATE',
+          payload: {
+            seq: endSeq,
+            text: emptyMarker,
+            transcript: state.transcript,
+          },
+        });
+
         state.transcribedChunks = endSeq;
         updateStatus(state.status, state.detail);
         return;

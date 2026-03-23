@@ -32,7 +32,7 @@ function App() {
   const previousAudioSourceLockedRef = useRef<boolean | null>(null);
 
   const {
-    error, activeView, status, recordingDiagnostics,
+    error, warning, activeView, status, recordingDiagnostics,
     devices, selectedDeviceId, selectedSource,
     notesSessions, selectedSessionId,
     notesLoading, notesError, notesSearch, exportToast,
@@ -172,6 +172,10 @@ function App() {
 
       if (message.type === 'ERROR') {
         dispatch({ type: 'SET_ERROR', payload: message.payload.message });
+      }
+
+      if (message.type === 'WARNING') {
+        dispatch({ type: 'SET_WARNING', payload: message.payload.message });
       }
     };
 
@@ -497,6 +501,7 @@ function App() {
           selectedDeviceId={selectedDeviceId}
           devices={devices}
           error={error}
+          warning={warning}
           t={t}
           onStartListening={handleStartListening}
           onStopListening={handleStopListening}

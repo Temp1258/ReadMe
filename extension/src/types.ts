@@ -34,7 +34,8 @@ export type RuntimeEventMessage =
         diagnostics: RecordingDiagnostics;
       };
     }
-  | { type: 'ERROR'; payload: { message: string } };
+  | { type: 'ERROR'; payload: { message: string } }
+  | { type: 'WARNING'; payload: { message: string } };
 
 export type GetSttSettingsResponse =
   | {

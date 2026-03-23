@@ -490,12 +490,17 @@ h3 {
 
 .error,
 .success,
+.notice,
 .panel__body {
   font-size: 13px;
 }
 
 .error {
   color: #b03333;
+}
+
+.notice {
+  color: #7a6a1e;
 }
 
 .success {
