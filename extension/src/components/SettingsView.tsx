@@ -123,6 +123,12 @@ export function SettingsView({
         </div>
       </div>
 
+      <div className="warning-inline warning-inline--compact">
+        <p>
+          {t('warningOneLine')}
+        </p>
+      </div>
+
       <details className="settings-card">
         <summary>{t('privacySummary')}</summary>
         <p className="panel__body">{t('privacyBody')}</p>
