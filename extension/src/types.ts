@@ -32,9 +32,11 @@ export type RuntimeEventMessage =
         selectedSource: AudioSource;
         seq: number;
         diagnostics: RecordingDiagnostics;
+        recordingTabTitle?: string;
       };
     }
-  | { type: 'ERROR'; payload: { message: string } };
+  | { type: 'ERROR'; payload: { message: string } }
+  | { type: 'WARNING'; payload: { message: string } };
 
 export type GetSttSettingsResponse =
   | {

@@ -212,6 +212,7 @@ export async function queryStateFromOffscreen() {
         seq?: number;
         transcript?: string;
         diagnostics?: RecordingDiagnostics;
+        recordingTabTitle?: string;
       }>)
     | undefined;
 

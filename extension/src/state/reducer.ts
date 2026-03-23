@@ -3,6 +3,7 @@ import type { SessionRecord } from '../db/indexeddb';
 
 export type AppState = {
   error: string | null;
+  warning: string | null;
   activeView: AppView;
   status: AudioStatus;
   recordingDiagnostics: RecordingDiagnostics;
@@ -10,6 +11,7 @@ export type AppState = {
   selectedDeviceId: string;
   selectedSource: AudioSource;
   transcriptText: string;
+  recordingTabTitle: string | null;
   sttStatusLine: string;
   sttConfigured: boolean;
   notesSessions: SessionRecord[];
@@ -25,6 +27,7 @@ export type AppState = {
 
 export const initialState: AppState = {
   error: null,
+  warning: null,
   activeView: 'transcription',
   status: 'Idle',
   recordingDiagnostics: {
@@ -41,6 +44,7 @@ export const initialState: AppState = {
   selectedDeviceId: 'default',
   selectedSource: 'mic',
   transcriptText: '',
+  recordingTabTitle: null,
   sttStatusLine: 'Unknown',
   sttConfigured: false,
   notesSessions: [],
@@ -56,6 +60,7 @@ export const initialState: AppState = {
 
 export type AppAction =
   | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_WARNING'; payload: string | null }
   | { type: 'SET_ACTIVE_VIEW'; payload: AppView }
   | { type: 'SET_STATUS'; payload: AudioStatus }
   | { type: 'SET_DIAGNOSTICS'; payload: RecordingDiagnostics }
@@ -74,7 +79,7 @@ export type AppAction =
   | { type: 'SET_UI_THEME'; payload: UITheme }
   | { type: 'SET_UI_LANG'; payload: UILang }
   | { type: 'UPDATE_SESSION'; payload: { id: string; updates: Partial<SessionRecord> } }
-  | { type: 'SYNC_RECORDING_STATE'; payload: Partial<Pick<AppState, 'status' | 'selectedDeviceId' | 'selectedSource' | 'transcriptText' | 'recordingDiagnostics'>> }
+  | { type: 'SYNC_RECORDING_STATE'; payload: Partial<Pick<AppState, 'status' | 'selectedDeviceId' | 'selectedSource' | 'transcriptText' | 'recordingDiagnostics' | 'recordingTabTitle'>> }
   | { type: 'CLEAR_ALL_SESSIONS' }
   | { type: 'DELETE_SESSION'; payload: string };
 
@@ -82,6 +87,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_ERROR':
       return { ...state, error: action.payload };
+    case 'SET_WARNING':
+      return { ...state, warning: action.payload };
     case 'SET_ACTIVE_VIEW':
       return { ...state, activeView: action.payload };
     case 'SET_STATUS':
