@@ -1,38 +1,25 @@
 /**
  * Shared overlap deduplication for transcript segments.
  * Used by both transcription.ts (batch) and live-transcribe.ts (live).
+ *
+ * Uses character-level suffix-prefix matching after normalization,
+ * which works correctly for CJK languages (no word boundaries) as
+ * well as Latin/space-separated languages.
  */
 
-import { MIN_OVERLAP_DEDUP_WORDS, MAX_OVERLAP_DEDUP_WORDS } from '../offscreen/constants';
+/** Max normalized characters to check for overlap in the existing transcript tail. */
+const MAX_OVERLAP_CHARS = 1200;
 
-function normalizeWord(word: string): string {
-  return word.toLowerCase().replace(/(^[^a-z0-9']+|[^a-z0-9']+$)/gi, '');
-}
+/** Min normalized characters for a valid overlap match (avoids false positives). */
+const MIN_OVERLAP_CHARS = 10;
 
 /**
- * Extract the last N whitespace-separated words from a string without
- * splitting the entire string.  This avoids O(n) work on a transcript
- * that can grow to 100 KB+ during a 2-hour recording.
+ * Normalize text for overlap comparison: lowercase, remove all
+ * punctuation, symbols, and whitespace so that minor formatting
+ * differences don't prevent a match.
  */
-function lastNWords(text: string, n: number): string[] {
-  const words: string[] = [];
-  let end = text.length;
-
-  while (words.length < n && end > 0) {
-    // Skip trailing whitespace
-    while (end > 0 && /\s/.test(text[end - 1])) end--;
-    if (end === 0) break;
-
-    // Find start of current word
-    let start = end;
-    while (start > 0 && !/\s/.test(text[start - 1])) start--;
-
-    words.push(text.slice(start, end));
-    end = start;
-  }
-
-  words.reverse();
-  return words;
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[\p{P}\p{S}\s]/gu, '');
 }
 
 /**
@@ -40,29 +27,66 @@ function lastNWords(text: string, n: number): string[] {
  * overlapping prefix from the incoming text that already appears at the
  * end of the existing transcript.
  *
- * Uses a sliding-window approach checking 3-40 word overlap.
+ * Works by finding the longest suffix of the normalized existing text
+ * that is a prefix of the normalized incoming text, then mapping that
+ * match back to the original incoming string to determine how many
+ * characters to strip.
  */
 export function removeOverlapPrefix(existing: string, incoming: string): string {
   if (!existing || !incoming) return incoming.trim();
 
-  // Only extract the tail we actually need — O(MAX_OVERLAP_DEDUP_WORDS), not O(transcript length)
-  const tailWords = lastNWords(existing, MAX_OVERLAP_DEDUP_WORDS).map(normalizeWord).filter(Boolean);
-  const incomingWords = incoming.trim().split(/\s+/).filter(Boolean);
+  const trimmedIncoming = incoming.trim();
 
-  if (tailWords.length === 0 || incomingWords.length === 0) {
-    return incoming.trim();
+  const normExisting = normalize(existing);
+  const normIncoming = normalize(trimmedIncoming);
+
+  if (normExisting.length < MIN_OVERLAP_CHARS || normIncoming.length < MIN_OVERLAP_CHARS) {
+    return trimmedIncoming;
   }
 
-  const headWords = incomingWords.map(normalizeWord).filter(Boolean);
-  const maxOverlap = Math.min(tailWords.length, headWords.length, MAX_OVERLAP_DEDUP_WORDS);
+  // Only inspect the tail of existing up to MAX_OVERLAP_CHARS
+  const tail = normExisting.length > MAX_OVERLAP_CHARS
+    ? normExisting.slice(-MAX_OVERLAP_CHARS)
+    : normExisting;
 
-  for (let size = maxOverlap; size >= MIN_OVERLAP_DEDUP_WORDS; size--) {
-    const suffix = tailWords.slice(-size);
-    const prefix = headWords.slice(0, size);
-    if (suffix.every((w, i) => w === prefix[i])) {
-      return incomingWords.slice(size).join(' ').trim();
+  // Find the longest suffix of `tail` that is a prefix of `normIncoming`.
+  // Start from the longest possible and work down.
+  const maxCheck = Math.min(tail.length, normIncoming.length);
+  let bestMatchLen = 0;
+
+  for (let start = tail.length - maxCheck; start <= tail.length - MIN_OVERLAP_CHARS; start++) {
+    const suffix = tail.slice(start);
+    if (normIncoming.startsWith(suffix)) {
+      bestMatchLen = suffix.length;
+      break;
     }
   }
 
-  return incoming.trim();
+  if (bestMatchLen === 0) return trimmedIncoming;
+
+  // Map bestMatchLen normalized chars back to original incoming text position.
+  // Iterate by code points (not code units) to correctly handle emoji and
+  // other characters outside the BMP that are stored as surrogate pairs.
+  const codePoints = [...trimmedIncoming]; // splits by code points
+  let normCount = 0;
+  let cpIdx = 0;
+  let origPos = 0;
+  const puncSymWs = /[\p{P}\p{S}\s]/u;
+  while (normCount < bestMatchLen && cpIdx < codePoints.length) {
+    const cp = codePoints[cpIdx];
+    if (!puncSymWs.test(cp)) {
+      normCount++;
+    }
+    origPos += cp.length; // 1 for BMP, 2 for surrogate pairs
+    cpIdx++;
+  }
+
+  // Also skip any trailing punctuation/symbols/whitespace that sit between
+  // the matched overlap and the genuinely new content.
+  while (cpIdx < codePoints.length && puncSymWs.test(codePoints[cpIdx])) {
+    origPos += codePoints[cpIdx].length;
+    cpIdx++;
+  }
+
+  return trimmedIncoming.slice(origPos).trim();
 }
