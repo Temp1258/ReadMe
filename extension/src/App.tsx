@@ -287,8 +287,9 @@ function App() {
       if (selectedSource === 'tab' || selectedSource === 'mix') {
         // Capture the active tab's title before grabbing the stream
         try {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          capturedTabTitle = activeTab?.title ?? undefined;
+          const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          const tab = tabs.find((t) => t.title && !t.url?.startsWith('chrome-extension://'));
+          capturedTabTitle = tab?.title ?? undefined;
         } catch { /* non-critical */ }
 
         streamId = await new Promise<string>((resolve, reject) => {
