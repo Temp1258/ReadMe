@@ -517,7 +517,6 @@ function App() {
           onStopListening={handleStopListening}
           onSourceChange={handleSourceChange}
           onDeviceChange={handleDeviceChange}
-          onLearnMoreClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', payload: 'settings' })}
         />
       ) : null}
 

@@ -28,7 +28,7 @@ type TranscriptionViewProps = {
   onStopListening: () => void;
   onSourceChange: (source: AudioSource) => void;
   onDeviceChange: (deviceId: string) => void;
-  onLearnMoreClick: () => void;
+
 };
 
 export function TranscriptionView({
@@ -48,7 +48,7 @@ export function TranscriptionView({
   onStopListening,
   onSourceChange,
   onDeviceChange,
-  onLearnMoreClick,
+
 }: TranscriptionViewProps) {
   const [providerLabel, setProviderLabel] = useState('Mock');
   const [providerConfigured, setProviderConfigured] = useState(false);
@@ -117,15 +117,6 @@ export function TranscriptionView({
             {t('stop')}
           </button>
         )}
-
-        <div className="warning-inline warning-inline--compact">
-          <p>
-            {t('warningOneLine')}
-            <button className="link-button" onClick={onLearnMoreClick} type="button">
-              {t('learnMore')}
-            </button>
-          </p>
-        </div>
       </section>
 
       <section className="inputs-section">
