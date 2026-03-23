@@ -62,6 +62,8 @@ export function removeOverlapPrefix(existing: string, incoming: string): string 
     }
   }
 
+  console.info(`[dedup] existingLen=${normExisting.length} incomingLen=${normIncoming.length} tailLen=${tail.length} bestMatchLen=${bestMatchLen}`);
+
   if (bestMatchLen === 0) return trimmedIncoming;
 
   // Map bestMatchLen normalized chars back to original incoming text position.
@@ -88,5 +90,7 @@ export function removeOverlapPrefix(existing: string, incoming: string): string 
     cpIdx++;
   }
 
-  return trimmedIncoming.slice(origPos).trim();
+  const result = trimmedIncoming.slice(origPos).trim();
+  console.info(`[dedup] removed ${origPos} chars, result starts with: "${result.slice(0, 40)}..."`);
+  return result;
 }
