@@ -7,7 +7,7 @@ import {
 } from '../db/indexeddb';
 import { state, inMemoryApiKey, inMemoryDeepgramApiKey, inMemorySiliconflowApiKey, activeProvider, setInMemoryApiKey, setInMemoryDeepgramApiKey, setActiveProvider, updateStatus, publishError, computeDiagnostics, broadcast, refreshSttRuntimeSettings, resetLiveCumulativeAudioOffset } from './state';
 import type { AudioSource } from './state';
-import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES } from './constants';
+import { CHUNK_TIMESLICE_MS, MAX_RECORDING_DURATION_MS, MAX_RECORDING_SIZE_BYTES, RECORDING_WARN_BEFORE_STOP_MS } from './constants';
 import { transcribeRecordingInSegments } from './segmentation';
 import { enqueueChunkForLiveTranscription, flushLiveTranscribeQueue, retryFailedBatches, resetLiveTranscribeState } from './live-transcribe';
 
@@ -95,7 +95,9 @@ async function stopTracks(): Promise<void> {
   state.playbackDestinationNode = null;
 
   if (state.playbackContext) {
-    await state.playbackContext.close();
+    if (state.playbackContext.state !== 'closed') {
+      await state.playbackContext.close();
+    }
     state.playbackContext = null;
   }
 
@@ -107,6 +109,8 @@ function startDiagnosticsTimer(): void {
     clearInterval(state.diagnosticsTimerId);
   }
 
+  let warnedApproachingLimit = false;
+
   state.diagnosticsTimerId = window.setInterval(() => {
     if (state.status === 'Listening') {
       updateStatus(state.status, state.detail);
@@ -115,6 +119,16 @@ function startDiagnosticsTimer(): void {
       const session = state.recordingSession;
       if (session) {
         const elapsed = Date.now() - session.startTime;
+        const remaining = MAX_RECORDING_DURATION_MS - elapsed;
+
+        // Warn user when approaching the time limit
+        if (!warnedApproachingLimit && remaining > 0 && remaining <= RECORDING_WARN_BEFORE_STOP_MS) {
+          warnedApproachingLimit = true;
+          const remainMin = Math.ceil(remaining / 60000);
+          console.warn(`[recording] approaching max duration limit, ${remainMin} min remaining`);
+          broadcast({ type: 'ERROR', payload: { message: `Recording will auto-stop in ${remainMin} minutes (max ${MAX_RECORDING_DURATION_MS / 3600000}h limit)` } });
+        }
+
         if (elapsed >= MAX_RECORDING_DURATION_MS) {
           console.info(`[recording] auto-stop: max duration reached (${Math.round(elapsed / 60000)}min)`);
           void stopRecording();
@@ -175,6 +189,27 @@ async function getAudioStream(source: AudioSource, streamId?: string): Promise<M
 
     tabSourceNode.connect(destinationNode);
     tabSourceNode.connect(context.destination);
+
+    // Detect tab audio track ending (tab closed, navigation, etc.)
+    if (tabTrack) {
+      tabTrack.addEventListener('ended', () => {
+        console.warn('[recording] tab audio track ended unexpectedly');
+        if (state.recorder && state.status === 'Listening') {
+          broadcast({ type: 'ERROR', payload: { message: 'Tab audio stream ended. The meeting tab may have been closed. Stopping recording to save transcript.' } });
+          void stopRecording();
+        }
+      });
+    }
+
+    // Auto-resume AudioContext if browser suspends it (e.g. tab switch)
+    context.addEventListener('statechange', () => {
+      if (context.state === 'suspended' && state.status === 'Listening') {
+        console.warn('[recording] AudioContext suspended, attempting resume');
+        void context.resume().catch((err) => {
+          console.error('[recording] AudioContext resume failed:', err);
+        });
+      }
+    });
 
     let micStream: MediaStream | null = null;
 

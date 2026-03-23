@@ -12,8 +12,11 @@ export const TRANSCRIBE_INITIAL_BACKOFF_MS = 500;
 /** Number of chunks to accumulate before triggering live transcription (2 chunks = ~60s) */
 export const LIVE_TRANSCRIBE_CHUNK_COUNT = 2;
 
-/** Maximum recording duration in milliseconds (2 hours). Auto-stop when reached. */
-export const MAX_RECORDING_DURATION_MS = 2 * 60 * 60 * 1000;
+/** Maximum recording duration in milliseconds (4 hours). Auto-stop when reached. */
+export const MAX_RECORDING_DURATION_MS = 4 * 60 * 60 * 1000;
+
+/** Warning threshold before auto-stop (10 minutes before limit). */
+export const RECORDING_WARN_BEFORE_STOP_MS = 10 * 60 * 1000;
 
 /** Maximum total recording size in bytes (500 MB). Auto-stop when reached. */
 export const MAX_RECORDING_SIZE_BYTES = 500 * 1024 * 1024;
