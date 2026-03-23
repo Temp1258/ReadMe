@@ -7,8 +7,10 @@ import { extractWebmHeaderFromBlob } from '../utils/webm';
 import { removeOverlapPrefix } from '../utils/dedup';
 import { getAudioDurationMs } from '../utils/audio-duration';
 
-/** Maximum number of failed batches to keep in memory for recovery. */
-const MAX_FAILED_BATCHES = 20;
+/** Maximum number of failed batches to keep in memory for recovery.
+ *  For a 4-hour recording at 1 batch/min = 240 batches.
+ *  A 30-min network outage = ~30 failed batches, so 60 gives headroom. */
+const MAX_FAILED_BATCHES = 60;
 
 /**
  * Promise tracking the in-flight processLiveTranscribeQueue so that
@@ -90,11 +92,17 @@ async function processLiveTranscribeQueue(): Promise<void> {
   try {
     while (state.liveTranscribeQueue.length >= LIVE_TRANSCRIBE_CHUNK_COUNT) {
       const batch = state.liveTranscribeQueue.splice(0, LIVE_TRANSCRIBE_CHUNK_COUNT);
-      await transcribeBatch(batch);
+      try {
+        await transcribeBatch(batch);
+      } catch (error) {
+        // Catch per-batch errors so one failure doesn't kill all subsequent batches.
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[live-transcribe] batch failed (non-fatal): ${msg}`);
+      }
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.warn(`[live-transcribe] batch failed: ${msg}`);
+    console.warn(`[live-transcribe] queue processing failed: ${msg}`);
   } finally {
     state.liveTranscribeRunning = false;
     liveTranscribeProcessingPromise = null;
@@ -278,6 +286,7 @@ async function transcribeBatch(
     console.info(`[live-transcribe] queued failed batch for recovery (${state.liveFailedBatches.length}/${MAX_FAILED_BATCHES})`);
   } else {
     console.warn(`[live-transcribe] failed batch queue full (${MAX_FAILED_BATCHES}), dropping chunks ${startSeq}-${endSeq}`);
+    broadcast({ type: 'ERROR', payload: { message: 'Transcription is failing repeatedly. Audio is still being recorded and can be re-transcribed later.' } });
   }
 
   state.transcribedChunks = endSeq;
