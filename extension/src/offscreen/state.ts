@@ -26,6 +26,7 @@ export type RuntimeEventMessage =
         selectedSource: AudioSource;
         seq: number;
         diagnostics: RecordingDiagnostics;
+        recordingTabTitle?: string;
       };
     }
   | { type: 'TRANSCRIPT_UPDATE'; payload: { seq: number; text: string; transcript: string } }
@@ -75,6 +76,7 @@ export const state = {
   webmHeaderExtracted: false,
   transcribedChunks: 0,
   totalChunksToTranscribe: 0,
+  recordingTabTitle: null as string | null,
 };
 
 export let inMemoryApiKey: string | null = null;
@@ -184,6 +186,7 @@ export function updateStatus(status: AudioStatus, detail?: string): void {
       selectedSource: state.selectedSource,
       seq: state.seq,
       diagnostics: computeDiagnostics(),
+      recordingTabTitle: state.recordingTabTitle ?? undefined,
     },
   });
 }

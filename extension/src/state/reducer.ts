@@ -11,6 +11,7 @@ export type AppState = {
   selectedDeviceId: string;
   selectedSource: AudioSource;
   transcriptText: string;
+  recordingTabTitle: string | null;
   sttStatusLine: string;
   sttConfigured: boolean;
   notesSessions: SessionRecord[];
@@ -43,6 +44,7 @@ export const initialState: AppState = {
   selectedDeviceId: 'default',
   selectedSource: 'mic',
   transcriptText: '',
+  recordingTabTitle: null,
   sttStatusLine: 'Unknown',
   sttConfigured: false,
   notesSessions: [],
@@ -77,7 +79,7 @@ export type AppAction =
   | { type: 'SET_UI_THEME'; payload: UITheme }
   | { type: 'SET_UI_LANG'; payload: UILang }
   | { type: 'UPDATE_SESSION'; payload: { id: string; updates: Partial<SessionRecord> } }
-  | { type: 'SYNC_RECORDING_STATE'; payload: Partial<Pick<AppState, 'status' | 'selectedDeviceId' | 'selectedSource' | 'transcriptText' | 'recordingDiagnostics'>> }
+  | { type: 'SYNC_RECORDING_STATE'; payload: Partial<Pick<AppState, 'status' | 'selectedDeviceId' | 'selectedSource' | 'transcriptText' | 'recordingDiagnostics' | 'recordingTabTitle'>> }
   | { type: 'CLEAR_ALL_SESSIONS' }
   | { type: 'DELETE_SESSION'; payload: string };
 

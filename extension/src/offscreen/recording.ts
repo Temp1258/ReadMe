@@ -374,18 +374,20 @@ export async function stopRecording(): Promise<void> {
   stopDiagnosticsTimer();
   state.recordingSession = null;
   state.nextChunkSeq = 1;
+  state.recordingTabTitle = null;
 
   if (!transcriptionFailed && state.status !== 'Error') {
     updateStatus('Stopped', 'Stopped');
   }
 }
 
-export async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string): Promise<void> {
+export async function startRecording(deviceId?: string, source: AudioSource = 'mic', streamId?: string, tabTitle?: string): Promise<void> {
   if (deviceId) {
     state.selectedDeviceId = deviceId;
   }
 
   state.selectedSource = source;
+  state.recordingTabTitle = (source === 'tab' || source === 'mix') ? (tabTitle ?? null) : null;
 
   await stopRecording();
 

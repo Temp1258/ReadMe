@@ -33,7 +33,7 @@ function App() {
 
   const {
     error, warning, activeView, status, recordingDiagnostics,
-    devices, selectedDeviceId, selectedSource,
+    devices, selectedDeviceId, selectedSource, recordingTabTitle,
     notesSessions, selectedSessionId,
     notesLoading, notesError, notesSearch, exportToast,
     summaryLoading, uiTheme, uiLang,
@@ -137,6 +137,7 @@ function App() {
             selectedSource: isRecording ? (snapshot?.selectedSource ?? defaultSource) : defaultSource,
             transcriptText: liveTranscript || latestSession?.transcript || '',
             ...(snapshot?.diagnostics ? { recordingDiagnostics: snapshot.diagnostics } : {}),
+            recordingTabTitle: snapshot?.recordingTabTitle ?? null,
           },
         });
       } catch (syncError) {
@@ -156,6 +157,7 @@ function App() {
             selectedDeviceId: message.payload.selectedDeviceId,
             selectedSource: message.payload.selectedSource,
             recordingDiagnostics: message.payload.diagnostics,
+            recordingTabTitle: message.payload.recordingTabTitle ?? null,
           },
         });
 
@@ -239,7 +241,7 @@ function App() {
 
   const sendControlMessage = async (
     message:
-        | { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string } }
+        | { type: 'START_RECORDING'; payload?: { deviceId?: string; source?: AudioSource; streamId?: string; tabTitle?: string } }
       | { type: 'STOP_RECORDING' }
       | { type: 'REFRESH_SETTINGS' },
   ) => {
@@ -281,7 +283,14 @@ function App() {
       }
 
       let streamId: string | undefined;
+      let capturedTabTitle: string | undefined;
       if (selectedSource === 'tab' || selectedSource === 'mix') {
+        // Capture the active tab's title before grabbing the stream
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          capturedTabTitle = activeTab?.title ?? undefined;
+        } catch { /* non-critical */ }
+
         streamId = await new Promise<string>((resolve, reject) => {
           if (!chrome.tabCapture?.getMediaStreamId) {
             reject(new Error('Tab audio capture is not available in this browser.'));
@@ -300,7 +309,7 @@ function App() {
       await sendControlMessage({ type: 'REFRESH_SETTINGS' });
       await sendControlMessage({
         type: 'START_RECORDING',
-        payload: { deviceId: selectedDeviceId, source: selectedSource, streamId },
+        payload: { deviceId: selectedDeviceId, source: selectedSource, streamId, tabTitle: capturedTabTitle },
       });
     } catch (startError) {
       const message = startError instanceof Error ? startError.message : 'Unable to start recording.';
@@ -502,6 +511,7 @@ function App() {
           devices={devices}
           error={error}
           warning={warning}
+          recordingTabTitle={recordingTabTitle}
           t={t}
           onStartListening={handleStartListening}
           onStopListening={handleStopListening}

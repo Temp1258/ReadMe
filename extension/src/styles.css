@@ -678,29 +678,13 @@ h3 {
   margin: 0;
 }
 
-.transcript-progress-bar {
-  background: var(--surfaceAlt);
-  border-radius: 4px;
-  height: 8px;
+.recording-source-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
   overflow: hidden;
-  width: 100%;
-}
-
-.transcript-progress-bar__fill {
-  background: var(--primary);
-  border-radius: 4px;
-  height: 100%;
-  min-width: 0;
-  transition: width 0.3s ease;
-}
-
-.transcript-progress-bar__fill--active {
-  animation: progress-pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes progress-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .transcript-progress-bar__info {

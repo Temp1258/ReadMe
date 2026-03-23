@@ -22,6 +22,7 @@ type TranscriptionViewProps = {
   devices: DeviceOption[];
   error: string | null;
   warning: string | null;
+  recordingTabTitle: string | null;
   t: (key: TranslationKey) => string;
   onStartListening: () => void;
   onStopListening: () => void;
@@ -41,6 +42,7 @@ export function TranscriptionView({
   devices,
   error,
   warning,
+  recordingTabTitle,
   t,
   onStartListening,
   onStopListening,
@@ -62,12 +64,15 @@ export function TranscriptionView({
     });
   }, []);
 
-  const { transcribedChunks, totalChunksToTranscribe } = recordingDiagnostics;
   const isTranscribing = status === 'Listening' || status === 'Transcribing';
-  const hasProgress = totalChunksToTranscribe > 0;
-  const progressPct = hasProgress
-    ? Math.min(100, (transcribedChunks / totalChunksToTranscribe) * 100)
-    : 0;
+
+  // Build the recording source label for the bottom panel
+  const sourceLabel = (() => {
+    if (selectedSource === 'tab' || selectedSource === 'mix') {
+      return recordingTabTitle || t('sourceTab');
+    }
+    return t('sourceMic');
+  })();
 
   return (
     <section className="transcription-view">
@@ -96,7 +101,7 @@ export function TranscriptionView({
           <p className="status-metrics__item" role="listitem">
             <span className="status-metrics__label">{t('metricChunks')}</span>
             <span className="status-metrics__value">
-              {transcribedChunks} / {totalChunksToTranscribe}
+              {recordingDiagnostics.transcribedChunks} / {recordingDiagnostics.totalChunksToTranscribe}
             </span>
           </p>
         </div>
@@ -174,15 +179,10 @@ export function TranscriptionView({
 
       <section className="transcript-progress-panel">
         <div className="transcript-progress-panel__header">
-          <h2>{t('transcriptionProgress')}</h2>
+          <h2>{t('recordingSource')}</h2>
           <span className={`status-indicator status-indicator--${status.toLowerCase()}`}>{status}</span>
         </div>
-        <div className="transcript-progress-bar">
-          <div
-            className={`transcript-progress-bar__fill ${isTranscribing && hasProgress ? 'transcript-progress-bar__fill--active' : ''}`}
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
+        <p className="recording-source-label">{isTranscribing ? sourceLabel : t('notRecording')}</p>
       </section>
     </section>
   );

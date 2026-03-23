@@ -8,7 +8,7 @@ type RuntimeMessage =
   | { type: 'GET_AUDIO_STATE' }
   | {
       type: 'START_RECORDING';
-      payload?: { deviceId?: string; source?: AudioSource; streamId?: string };
+      payload?: { deviceId?: string; source?: AudioSource; streamId?: string; tabTitle?: string };
     }
   | { type: 'STOP_RECORDING' }
   | { type: 'REFRESH_SETTINGS' };
@@ -25,12 +25,13 @@ chrome.runtime.onMessage.addListener((rawMessage: RuntimeMessage, _sender, sendR
       detail: state.detail,
       transcript: state.transcript,
       diagnostics: computeDiagnostics(),
+      recordingTabTitle: state.recordingTabTitle ?? undefined,
     });
     return;
   }
 
   if (message?.type === 'START_RECORDING') {
-    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId)
+    startRecording(message.payload?.deviceId, message.payload?.source, message.payload?.streamId, message.payload?.tabTitle)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : String(error);
