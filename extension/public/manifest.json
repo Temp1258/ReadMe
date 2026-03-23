@@ -25,6 +25,7 @@
     "type": "module"
   },
   "permissions": [
+    "activeTab",
     "offscreen",
     "storage",
     "tabCapture"
