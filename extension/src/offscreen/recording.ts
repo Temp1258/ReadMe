@@ -387,9 +387,10 @@ export async function startRecording(deviceId?: string, source: AudioSource = 'm
   }
 
   state.selectedSource = source;
-  state.recordingTabTitle = (source === 'tab' || source === 'mix') ? (tabTitle ?? null) : null;
 
   await stopRecording();
+
+  state.recordingTabTitle = (source === 'tab' || source === 'mix') ? (tabTitle ?? null) : null;
 
   state.seq = 0;
   state.transcript = '';
