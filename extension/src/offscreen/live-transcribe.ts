@@ -7,6 +7,9 @@ import { extractWebmHeaderFromBlob } from '../utils/webm';
 import { removeOverlapPrefix } from '../utils/dedup';
 import { getAudioDurationMs } from '../utils/audio-duration';
 
+/** Maximum number of failed batches to keep in memory for recovery. */
+const MAX_FAILED_BATCHES = 20;
+
 /**
  * Promise tracking the in-flight processLiveTranscribeQueue so that
  * flushLiveTranscribeQueue can await it before draining remaining chunks.
@@ -20,6 +23,12 @@ let liveTranscribeProcessingPromise: Promise<void> | null = null;
  */
 let previousBatchLastChunk: Blob | null = null;
 
+/**
+ * Cached Blob of the WebM header bytes to avoid re-copying the
+ * ArrayBuffer on every buildTranscribableBlob call (120+ times).
+ */
+let cachedWebmHeaderBlob: Blob | null = null;
+
 async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   if (state.webmHeaderExtracted) return;
   state.webmHeaderExtracted = true;
@@ -31,16 +40,18 @@ async function extractWebmHeader(firstBlob: Blob): Promise<void> {
   }
 
   state.webmHeader = header;
+  // Pre-build the header blob once so we don't copy ArrayBuffer every batch
+  const headerCopy = new ArrayBuffer(header.byteLength);
+  new Uint8Array(headerCopy).set(header);
+  cachedWebmHeaderBlob = new Blob([headerCopy]);
   console.info(`[live-transcribe] WebM header extracted: ${state.webmHeader.byteLength} bytes`);
 }
 
 function buildTranscribableBlob(chunks: Array<{ blob: Blob }>, overlapChunk?: Blob | null): Blob {
   const parts: BlobPart[] = [];
 
-  if (state.webmHeader) {
-    const headerCopy = new ArrayBuffer(state.webmHeader.byteLength);
-    new Uint8Array(headerCopy).set(state.webmHeader);
-    parts.push(new Blob([headerCopy]));
+  if (cachedWebmHeaderBlob) {
+    parts.push(cachedWebmHeaderBlob);
   }
 
   // Prepend the overlap chunk from the previous batch for context
@@ -115,7 +126,7 @@ export async function flushLiveTranscribeQueue(): Promise<void> {
   }
 }
 
-interface CapturedKeys {
+export interface CapturedKeys {
   apiKey: string | null;
   deepgramKey: string | null;
   siliconflowKey: string | null;
@@ -182,8 +193,8 @@ async function transcribeBatch(
   console.info(`[live-transcribe] transcribing chunks ${startSeq}-${endSeq} (${sizeMB}MB) provider=${keys.provider} overlap=${hasOverlap}`);
 
   // Measure duration of the ACTUAL new chunks only (without overlap) for accurate timing.
-  // The overlap chunk is only for transcription context, not for offset calculation.
-  const newChunksBlob = buildTranscribableBlob(chunks);
+  // Build a blob without the overlap chunk to avoid counting overlap duration.
+  const newChunksBlob = overlapChunk ? buildTranscribableBlob(chunks) : mergedBlob;
   const measuredDurationMs = await getAudioDurationMs(newChunksBlob);
   const startOffsetMs = liveCumulativeAudioOffsetMs;
   let endOffsetMs: number;
@@ -253,16 +264,21 @@ async function transcribeBatch(
     }
   }
 
-  // All retries exhausted — save to failed queue for end-of-recording recovery
+  // All retries exhausted — save to failed queue for end-of-recording recovery.
+  // Cap the queue to prevent unbounded memory growth during long recordings.
   console.warn(`[live-transcribe] all ${TRANSCRIBE_MAX_RETRIES} attempts failed chunks ${startSeq}-${endSeq}: ${lastError?.message}`);
-  state.liveFailedBatches.push({
-    mergedBlob,
-    startSeq,
-    endSeq,
-    startOffsetMs,
-    endOffsetMs,
-  });
-  console.info(`[live-transcribe] queued failed batch for recovery (${state.liveFailedBatches.length} pending)`);
+  if (state.liveFailedBatches.length < MAX_FAILED_BATCHES) {
+    state.liveFailedBatches.push({
+      mergedBlob,
+      startSeq,
+      endSeq,
+      startOffsetMs,
+      endOffsetMs,
+    });
+    console.info(`[live-transcribe] queued failed batch for recovery (${state.liveFailedBatches.length}/${MAX_FAILED_BATCHES})`);
+  } else {
+    console.warn(`[live-transcribe] failed batch queue full (${MAX_FAILED_BATCHES}), dropping chunks ${startSeq}-${endSeq}`);
+  }
 
   state.transcribedChunks = endSeq;
   updateStatus(state.status, state.detail);
@@ -337,4 +353,5 @@ export async function retryFailedBatches(keys: CapturedKeys): Promise<void> {
 export function resetLiveTranscribeState(): void {
   previousBatchLastChunk = null;
   liveTranscribeProcessingPromise = null;
+  cachedWebmHeaderBlob = null;
 }
