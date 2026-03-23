@@ -95,7 +95,9 @@ async function stopTracks(): Promise<void> {
   state.playbackDestinationNode = null;
 
   if (state.playbackContext) {
-    await state.playbackContext.close();
+    if (state.playbackContext.state !== 'closed') {
+      await state.playbackContext.close();
+    }
     state.playbackContext = null;
   }
 
